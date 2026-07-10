@@ -145,6 +145,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .reduced-motion *, .reduced-motion *::before, .reduced-motion *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 
 @media (min-width: 760px) {
+  .app-stage { padding: 24px; }
   .device-frame { width: min(1080px, calc(100vw - 48px)); height: min(820px, calc(100dvh - 48px)); border-radius: 32px; padding: 8px; }
   .device-screen { border-radius: 25px; }
   .home-screen { padding: 22px clamp(28px, 5vw, 64px) 18px; }
