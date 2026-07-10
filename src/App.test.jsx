@@ -3,13 +3,49 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 
+class TestMediaRecorder {
+  static isTypeSupported() {
+    return true;
+  }
+
+  constructor() {
+    this.state = 'inactive';
+    this.mimeType = 'audio/webm';
+  }
+
+  start() {
+    this.state = 'recording';
+  }
+
+  stop() {
+    this.state = 'inactive';
+    this.ondataavailable?.({ data: new Blob(['voice sample'], { type: this.mimeType }) });
+    this.onstop?.();
+  }
+}
+
+const flushPromises = async () => {
+  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+};
+
 describe('Argue AI', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.stubGlobal('MediaRecorder', TestMediaRecorder);
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop: vi.fn() }] })) },
+    });
+    vi.stubGlobal('fetch', vi.fn(async (path, options = {}) => {
+      if (path === '/api/transcribe') return { ok: true, json: async () => ({ transcript: 'AI will replace most creative jobs within five years.' }) };
+      const body = JSON.parse(options.body);
+      return { ok: true, json: async () => ({ reply: body.mode === 'Brainstorm' ? 'Groq brainstorm response.' : 'Groq reasoning response.' }) };
+    }));
   });
 
   afterEach(() => {
     if (vi.isFakeTimers()) vi.runOnlyPendingTimers();
+    vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
@@ -48,42 +84,41 @@ describe('Argue AI', () => {
     expect(screen.getByText('Remote work makes people more productive and happier.')).toBeInTheDocument();
   });
 
-  it('sends text and adds a mode-appropriate assistant response', () => {
+  it('sends text to Groq and adds the returned assistant response', async () => {
     render(<App />);
     fireEvent.click(screen.getByRole('tab', { name: 'Text input' }));
     const input = screen.getByRole('textbox', { name: 'Add your argument' });
 
     fireEvent.change(input, { target: { value: 'Cities should ban private cars.' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send argument' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send argument' }));
+      await flushPromises();
+    });
 
     expect(screen.getByText('Cities should ban private cars.')).toBeInTheDocument();
-    expect(screen.queryByText('Voice status: thinking')).not.toBeInTheDocument();
-
-    act(() => vi.advanceTimersByTime(1100));
-
-    expect(screen.getByText(/That claim may be too broad/)).toBeInTheDocument();
-    expect(screen.queryByText('Voice status: speaking')).not.toBeInTheDocument();
+    expect(screen.getByText('Groq reasoning response.')).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith('/api/chat', expect.objectContaining({ method: 'POST' }));
   });
 
-  it('completes the mock voice flow with user and assistant messages', () => {
+  it('records voice, transcribes with Whisper, and sends the transcript to Groq', async () => {
     render(<App />);
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Start voice session' })[0]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start voice session' }));
+      await flushPromises();
+    });
     expect(screen.getByText('Voice status: listening')).toBeInTheDocument();
 
-    act(() => vi.advanceTimersByTime(1700));
-    expect(screen.queryByText('AI will replace most creative jobs within five years.')).not.toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: 'Conversation transcript' })).not.toBeInTheDocument();
-    expect(screen.getByText('Voice status: thinking')).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Stop voice session' }));
+      await flushPromises();
+    });
 
-    act(() => vi.advanceTimersByTime(1300));
-    expect(screen.queryByText(/That claim may be too broad/)).not.toBeInTheDocument();
-    expect(screen.getByText('Voice status: speaking')).toBeInTheDocument();
-
-    act(() => vi.advanceTimersByTime(1700));
     fireEvent.click(screen.getByRole('tab', { name: 'Text input' }));
     expect(screen.getByText('AI will replace most creative jobs within five years.')).toBeInTheDocument();
-    expect(screen.getByText(/That claim may be too broad/)).toBeInTheDocument();
+    expect(screen.getByText('Groq reasoning response.')).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith('/api/transcribe', expect.objectContaining({ method: 'POST' }));
+    expect(fetch).toHaveBeenCalledWith('/api/chat', expect.objectContaining({ method: 'POST' }));
   });
 
   it('cancels an active voice session when leaving the Argue screen', () => {

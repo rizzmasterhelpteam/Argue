@@ -83,17 +83,19 @@ const historyItems = [
   },
 ];
 
-const voicePrompts = {
-  Argue: 'AI will replace most creative jobs within five years.',
-  Brainstorm: 'I want to build a study app for busy students.',
-};
-
 const voiceButtonLabels = {
-  listening: 'LISTEN',
+  listening: 'STOP',
   transcribing: 'PROCESS',
   thinking: 'THINK',
   speaking: 'SPEAK',
 };
+
+async function requestJson(path, options) {
+  const response = await fetch(path, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'The AI service is unavailable right now.');
+  return data;
+}
 
 let fallbackId = 0;
 
@@ -137,25 +139,14 @@ export function App() {
   const [copiedId, setCopiedId] = useState(null);
   const [playingMessageId, setPlayingMessageId] = useState(null);
   const [notice, setNotice] = useState('');
-  const conversationTimers = useRef(new Set());
+  const voiceRecorder = useRef(null);
+  const voiceStream = useRef(null);
+  const voiceChunks = useRef([]);
+  const voiceCancelled = useRef(false);
+  const voiceAbort = useRef(null);
   const copyTimer = useRef(null);
-  const playbackTimer = useRef(null);
   const noticeTimer = useRef(null);
   const settingsTrigger = useRef(null);
-
-  const clearConversationTimers = useCallback(() => {
-    conversationTimers.current.forEach((timer) => window.clearTimeout(timer));
-    conversationTimers.current.clear();
-  }, []);
-
-  const schedule = useCallback((callback, delay) => {
-    const timer = window.setTimeout(() => {
-      conversationTimers.current.delete(timer);
-      callback();
-    }, delay);
-    conversationTimers.current.add(timer);
-    return timer;
-  }, []);
 
   const showNotice = useCallback((message) => {
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
@@ -176,88 +167,168 @@ export function App() {
   }, [settings]);
 
   useEffect(() => () => {
-    clearConversationTimers();
+    voiceCancelled.current = true;
+    voiceAbort.current?.abort();
+    if (voiceRecorder.current?.state === 'recording') voiceRecorder.current.stop();
+    voiceStream.current?.getTracks().forEach((track) => track.stop());
+    window.speechSynthesis?.cancel?.();
     if (copyTimer.current) window.clearTimeout(copyTimer.current);
-    if (playbackTimer.current) window.clearTimeout(playbackTimer.current);
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
-  }, [clearConversationTimers]);
+  }, []);
+
+  const speakResponse = useCallback((text, onEnd) => {
+    const synthesis = window.speechSynthesis;
+    const Utterance = window.SpeechSynthesisUtterance;
+    if (!synthesis || !Utterance) {
+      onEnd?.();
+      return false;
+    }
+
+    synthesis.cancel();
+    const utterance = new Utterance(text);
+    utterance.rate = Number(settings.speakingSpeed) || 1;
+    const preferredVoice = synthesis.getVoices?.().find((voice) => voice.name.toLowerCase().includes(settings.selectedVoice.toLowerCase()));
+    if (preferredVoice) utterance.voice = preferredVoice;
+    utterance.onend = () => onEnd?.();
+    utterance.onerror = () => onEnd?.();
+    synthesis.speak(utterance);
+    return true;
+  }, [settings.selectedVoice, settings.speakingSpeed]);
 
   const stopConversation = useCallback((announce = true) => {
-    clearConversationTimers();
+    voiceCancelled.current = true;
+    voiceAbort.current?.abort();
+    if (voiceRecorder.current?.state === 'recording') voiceRecorder.current.stop();
+    voiceStream.current?.getTracks().forEach((track) => track.stop());
+    window.speechSynthesis?.cancel?.();
+    setPlayingMessageId(null);
     setVoiceState('idle');
     if (announce) showNotice('Voice session stopped.');
-  }, [clearConversationTimers, showNotice]);
+  }, [showNotice]);
 
-  const simulateVoice = () => {
+  const startVoiceSession = async () => {
     if (voiceState !== 'idle') {
+      if (voiceState === 'listening' && voiceRecorder.current?.state === 'recording') {
+        haptic();
+        voiceRecorder.current.stop();
+        return;
+      }
       haptic();
       stopConversation();
       return;
     }
 
-    haptic();
-    const sessionMode = mode;
-    const spokenText = voicePrompts[sessionMode];
-    setVoiceState('listening');
+    if (!navigator.mediaDevices?.getUserMedia || typeof window.MediaRecorder === 'undefined') {
+      showNotice('Voice recording is not supported in this browser.');
+      return;
+    }
 
-    schedule(() => setVoiceState('transcribing'), 800);
-    schedule(() => {
-      setMessages((current) => [
-        ...current,
-        { id: createId('voice-user'), role: 'user', time: getCurrentTime(), text: spokenText },
-      ]);
-      setVoiceState('thinking');
-    }, 1600);
-    schedule(() => {
-      setMessages((current) => [
-        ...current,
-        {
-          id: createId('voice-ai'),
-          role: 'assistant',
-          time: getCurrentTime(),
-          text: createAssistantResponse(sessionMode, spokenText),
-        },
-      ]);
-      if (settings.autoPlayVoice) {
-        setVoiceState('speaking');
-        schedule(() => setVoiceState('idle'), 1600);
-      } else {
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      showNotice('Microphone access is needed for voice arguments.');
+      return;
+    }
+
+    const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find((type) => window.MediaRecorder.isTypeSupported?.(type));
+    const recorder = mimeType ? new window.MediaRecorder(stream, { mimeType }) : new window.MediaRecorder(stream);
+    voiceCancelled.current = false;
+    voiceRecorder.current = recorder;
+    voiceStream.current = stream;
+    voiceChunks.current = [];
+    setVoiceState('listening');
+    haptic();
+
+    recorder.ondataavailable = (event) => {
+      if (event.data?.size) voiceChunks.current.push(event.data);
+    };
+    recorder.onerror = () => {
+      stream.getTracks().forEach((track) => track.stop());
+      setVoiceState('idle');
+      showNotice('The recording could not be started.');
+    };
+    recorder.onstop = async () => {
+      stream.getTracks().forEach((track) => track.stop());
+      voiceRecorder.current = null;
+      voiceStream.current = null;
+      if (voiceCancelled.current) return;
+
+      const chunks = voiceChunks.current;
+      voiceChunks.current = [];
+      if (!chunks.length) {
         setVoiceState('idle');
+        showNotice('No audio was captured. Please try again.');
+        return;
       }
-    }, 2900);
+
+      setVoiceState('transcribing');
+      try {
+        const formData = new FormData();
+        formData.append('audio', new Blob(chunks, { type: mimeType || 'audio/webm' }), 'argument.webm');
+        voiceAbort.current = new AbortController();
+        const transcription = await requestJson('/api/transcribe', {
+          method: 'POST',
+          body: formData,
+          signal: voiceAbort.current.signal,
+        });
+        const transcript = transcription.transcript?.trim();
+        if (!transcript) throw new Error('No speech was detected in that recording.');
+
+        const userMessage = { id: createId('voice-user'), role: 'user', time: getCurrentTime(), text: transcript };
+        const nextMessages = [...messages, userMessage];
+        setMessages(nextMessages);
+        setVoiceState('thinking');
+        const response = await requestJson('/api/chat', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode, input: transcript, messages: nextMessages }),
+          signal: voiceAbort.current.signal,
+        });
+        const assistantMessage = { id: createId('voice-ai'), role: 'assistant', time: getCurrentTime(), text: response.reply };
+        setMessages((current) => [...current, assistantMessage]);
+        if (settings.autoPlayVoice && !voiceCancelled.current) {
+          setVoiceState('speaking');
+          if (!speakResponse(response.reply, () => setVoiceState('idle'))) setVoiceState('idle');
+        } else {
+          setVoiceState('idle');
+        }
+      } catch (error) {
+        if (error.name !== 'AbortError') showNotice(error.message);
+        setVoiceState('idle');
+      } finally {
+        voiceAbort.current = null;
+      }
+    };
+
+    recorder.start(250);
   };
 
-  const sendDraft = (event) => {
+  const sendDraft = async (event) => {
     event?.preventDefault();
     const value = draft.trim();
     if (!value || voiceState !== 'idle') return;
 
     haptic();
     const sessionMode = mode;
-    setMessages((current) => [
-      ...current,
-      { id: createId('text-user'), role: 'user', time: getCurrentTime(), text: value },
-    ]);
+    const userMessage = { id: createId('text-user'), role: 'user', time: getCurrentTime(), text: value };
+    const nextMessages = [...messages, userMessage];
+    setMessages(nextMessages);
     setDraft('');
     setVoiceState('thinking');
 
-    schedule(() => {
-      setMessages((current) => [
-        ...current,
-        {
-          id: createId('text-ai'),
-          role: 'assistant',
-          time: getCurrentTime(),
-          text: createAssistantResponse(sessionMode, value),
-        },
-      ]);
-      if (inputMode === 'voice' && settings.autoPlayVoice) {
-        setVoiceState('speaking');
-        schedule(() => setVoiceState('idle'), 1500);
-      } else {
-        setVoiceState('idle');
-      }
-    }, 1000);
+    try {
+      const response = await requestJson('/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: sessionMode, input: value, messages: nextMessages }),
+      });
+      setMessages((current) => [...current, { id: createId('text-ai'), role: 'assistant', time: getCurrentTime(), text: response.reply }]);
+    } catch (error) {
+      showNotice(error.message);
+    } finally {
+      setVoiceState('idle');
+    }
   };
 
   const copyMessage = async (message) => {
@@ -286,16 +357,18 @@ export function App() {
   };
 
   const replayMessage = (message) => {
-    if (playbackTimer.current) window.clearTimeout(playbackTimer.current);
-
     if (playingMessageId === message.id) {
+      window.speechSynthesis?.cancel?.();
       setPlayingMessageId(null);
       showNotice('Playback paused.');
       return;
     }
 
     setPlayingMessageId(message.id);
-    playbackTimer.current = window.setTimeout(() => setPlayingMessageId(null), 2200);
+    if (!speakResponse(message.text, () => setPlayingMessageId(null))) {
+      setPlayingMessageId(null);
+      showNotice('Voice playback is unavailable in this browser.');
+    }
   };
 
   const openSettings = (section = 'voice') => {
@@ -316,7 +389,7 @@ export function App() {
   const navigate = (destination) => {
     haptic();
     if (destination !== activeNav && voiceState !== 'idle') stopConversation(false);
-    if (playbackTimer.current) window.clearTimeout(playbackTimer.current);
+    window.speechSynthesis?.cancel?.();
     setPlayingMessageId(null);
     setActiveNav(destination);
   };
@@ -357,7 +430,7 @@ export function App() {
                 inputMode={inputMode}
                 setInputMode={setInputMode}
                 voiceState={voiceState}
-                simulateVoice={simulateVoice}
+                startVoiceSession={startVoiceSession}
                 messages={messages}
                 messageLimit={settings.compactTranscript ? 2 : 4}
                 draft={draft}
@@ -403,7 +476,7 @@ export function App() {
   );
 }
 
-function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, simulateVoice, messages, messageLimit, draft, setDraft, sendDraft, copyMessage, copiedId, playingMessageId, replayMessage, openSettings }) {
+function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, startVoiceSession, messages, messageLimit, draft, setDraft, sendDraft, copyMessage, copiedId, playingMessageId, replayMessage, openSettings }) {
   const activeState = voiceState === 'transcribing' ? 'thinking' : voiceState;
   const isBusy = voiceState !== 'idle';
   const transcriptRef = useRef(null);
@@ -477,7 +550,7 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, simula
 
       {inputMode === 'voice' && (
         <section className={isBusy ? 'voice-zone busy' : 'voice-zone'} aria-label="Voice conversation control">
-          <button className="voice-orbit" type="button" onClick={simulateVoice} aria-label={isBusy ? 'Stop voice session' : 'Start voice session'}>
+          <button className="voice-orbit" type="button" onClick={startVoiceSession} aria-label={isBusy ? 'Stop voice session' : 'Start voice session'}>
             <img className="orbit-art" src="/assets/argue-orbit.png" alt="" />
             <span className="voice-core">
               <Waveform className="core-waveform" size={45} weight="bold" />
