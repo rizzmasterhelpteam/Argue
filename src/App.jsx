@@ -40,13 +40,13 @@ const initialMessages = [
     id: 'm1',
     role: 'user',
     time: '9:41 AM',
-    text: 'Remote work makes people more productive and happier.',
+    text: 'Remote work makes people more productive.',
   },
   {
     id: 'm2',
     role: 'assistant',
     time: '9:41 AM',
-    text: 'While remote work offers flexibility, it can also lead to isolation, weaker collaboration, and blurred work-life boundaries.',
+    text: 'Sometimes. Flexibility helps, but isolation and blurred boundaries can erase the gain.',
   },
 ];
 
@@ -88,6 +88,14 @@ const voiceButtonLabels = {
   transcribing: 'PROCESS',
   thinking: 'THINK',
   speaking: 'SPEAK',
+};
+
+const voiceStatusCopy = {
+  idle: 'Tap ARGUE to speak · tap again to send',
+  listening: 'Listening · tap ARGUE when you’re done',
+  transcribing: 'Turning your voice into text',
+  thinking: 'Building the sharpest counterpoint',
+  speaking: 'Reading the response back to you',
 };
 
 async function requestJson(path, options) {
@@ -535,7 +543,7 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, startV
         </button>
       </div>
 
-      <p className="tagline">{mode === 'Argue' ? 'Defend your opinion.' : 'Shape your next big idea.'}</p>
+      <p className="tagline">{mode === 'Argue' ? 'Make the case.' : 'Build the idea.'}</p>
 
       <div className="input-mode-switcher" role="tablist" aria-label="Input mode">
         <button className={inputMode === 'voice' ? 'input-mode-tab active' : 'input-mode-tab'} disabled={isBusy} onClick={() => setInputMode('voice')} role="tab" aria-selected={inputMode === 'voice'} aria-label="Voice input" type="button">
@@ -563,6 +571,7 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, startV
             <StateItem icon={<Sparkle size={23} weight="fill" />} label="Thinking" active={activeState === 'thinking'} />
             <StateItem icon={<Waveform size={24} weight="bold" />} label="Speaking" active={activeState === 'speaking'} />
           </div>
+          <p className="voice-caption">{voiceStatusCopy[voiceState]}</p>
           <span className="sr-only" role="status">Voice status: {voiceState}</span>
         </section>
       )}

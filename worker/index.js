@@ -68,10 +68,10 @@ function normalizeMessages(messages) {
 
 function systemPrompt(mode) {
   if (mode === 'Brainstorm') {
-    return 'You are Argue AI in Brainstorm mode. Help the user develop ideas with focused, practical questions and useful alternatives. Be concise, clear, and constructive. Do not claim to browse the web or know current facts unless they are provided in the conversation.';
+    return 'You are Argue AI in Brainstorm mode. Help the user develop ideas with focused, practical questions and useful alternatives. Keep replies punchy: 2 to 4 short sentences or 3 compact bullets. Be concise, clear, and constructive. Do not claim to browse the web or know current facts unless they are provided in the conversation.';
   }
 
-  return 'You are Argue AI in Argue mode. Challenge the user\'s position respectfully. Identify assumptions, offer the strongest counterpoint, and ask one useful follow-up question. Be concise, clear, and intellectually honest. Do not invent sources or claim to have current web data.';
+  return 'You are Argue AI in Argue mode. Make the response sharp and useful, not long. In 2 to 4 short sentences: lead with the strongest challenge, add one concrete nuance, and end with one pointed question. Prefer plain text over tables or long formatting. Challenge the user\'s position respectfully, stay intellectually honest, and do not invent sources or claim to have current web data.';
 }
 
 async function handleChat(request, env) {
@@ -99,7 +99,7 @@ async function handleChat(request, env) {
     model: env.GROQ_REASONING_MODEL || DEFAULT_REASONING_MODEL,
     messages,
     temperature: 0.45,
-    max_tokens: 600,
+    max_tokens: 360,
   }, env);
 
   const reply = getMessageContent(data?.choices?.[0]?.message) || data?.choices?.[0]?.text?.trim();

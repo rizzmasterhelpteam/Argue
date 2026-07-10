@@ -54,7 +54,7 @@ describe('Argue AI', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Brainstorm' }));
 
-    expect(screen.getByText('Shape your next big idea.')).toBeInTheDocument();
+    expect(screen.getByText('Build the idea.')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Brainstorm' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('BRAINSTORM')).toBeInTheDocument();
   });
@@ -81,7 +81,7 @@ describe('Argue AI', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Text input' }));
 
     expect(screen.getByRole('region', { name: 'Conversation transcript' })).toBeInTheDocument();
-    expect(screen.getByText('Remote work makes people more productive and happier.')).toBeInTheDocument();
+    expect(screen.getByText('Remote work makes people more productive.')).toBeInTheDocument();
   });
 
   it('sends text to Groq and adds the returned assistant response', async () => {
