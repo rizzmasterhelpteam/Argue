@@ -1,6 +1,17 @@
 const GROQ_API_URL = 'https://api.groq.com/openai/v1';
 const DEFAULT_TRANSCRIPTION_MODEL = 'whisper-large-v3-turbo';
 const DEFAULT_REASONING_MODEL = 'openai/gpt-oss-20b';
+const DEFAULT_TTS_LANGUAGE = 'en-GB';
+const DEFAULT_TTS_VOICE = 'en-GB-Chirp3-HD-Algenib';
+const MAX_TTS_TEXT_LENGTH = 4000;
+const TTS_RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
+const TTS_RATE_LIMIT_MAX_REQUESTS = 30;
+
+let ttsCredentialValue = '';
+let ttsCredentials = null;
+let ttsAccessToken = '';
+let ttsAccessTokenExpiry = 0;
+const ttsRateLimits = new Map();
 
 class ApiError extends Error {
   constructor(message, status = 500) {
@@ -24,6 +35,134 @@ function requireApiKey(env) {
     throw new ApiError('The AI service is not configured yet.', 503);
   }
   return env.GROQ_API_KEY;
+}
+
+function getTtsCredentials(env) {
+  const encodedCredentials = env.GOOGLE_TTS_CREDENTIALS_BASE64;
+  if (!encodedCredentials) {
+    throw new ApiError('Voice playback is not configured yet.', 503);
+  }
+
+  if (ttsCredentials && ttsCredentialValue === encodedCredentials) return { credentials: ttsCredentials, encodedCredentials };
+
+  let credentials;
+  try {
+    const decodedCredentials = Buffer.from(encodedCredentials, 'base64').toString('utf8');
+    credentials = JSON.parse(decodedCredentials);
+  } catch {
+    throw new ApiError('Voice playback is configured incorrectly.', 503);
+  }
+
+  if (!credentials?.project_id || !credentials?.client_email || !credentials?.private_key) {
+    throw new ApiError('Voice playback is configured incorrectly.', 503);
+  }
+
+  ttsCredentials = credentials;
+  ttsCredentialValue = encodedCredentials;
+  ttsAccessToken = '';
+  ttsAccessTokenExpiry = 0;
+  return { credentials, encodedCredentials };
+}
+
+function base64UrlEncode(value) {
+  const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function privateKeyBytes(privateKey) {
+  const encoded = privateKey
+    .replace('-----BEGIN PRIVATE KEY-----', '')
+    .replace('-----END PRIVATE KEY-----', '')
+    .replace(/\s/g, '');
+  const binary = atob(encoded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes.buffer;
+}
+
+async function getGoogleAccessToken(credentials, encodedCredentials) {
+  const now = Math.floor(Date.now() / 1000);
+  if (ttsAccessToken && ttsCredentialValue === encodedCredentials && now < ttsAccessTokenExpiry - 60) {
+    return ttsAccessToken;
+  }
+
+  const assertionHeader = base64UrlEncode(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const assertionPayload = base64UrlEncode(JSON.stringify({
+    iss: credentials.client_email,
+    scope: 'https://www.googleapis.com/auth/cloud-platform',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now,
+    exp: now + 3600,
+  }));
+  const assertionData = `${assertionHeader}.${assertionPayload}`;
+
+  let key;
+  try {
+    key = await crypto.subtle.importKey(
+      'pkcs8',
+      privateKeyBytes(credentials.private_key),
+      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    );
+  } catch {
+    throw new ApiError('Voice playback credentials are invalid.', 503);
+  }
+
+  const signature = await crypto.subtle.sign(
+    { name: 'RSASSA-PKCS1-v1_5' },
+    key,
+    new TextEncoder().encode(assertionData),
+  );
+  const assertion = `${assertionData}.${base64UrlEncode(new Uint8Array(signature))}`;
+  const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion,
+    }),
+  });
+
+  if (!tokenResponse.ok) {
+    console.error('Google TTS auth failed', tokenResponse.status);
+    throw new ApiError('Voice playback authentication failed.', 502);
+  }
+
+  const tokenData = await tokenResponse.json();
+  if (!tokenData?.access_token) throw new ApiError('Voice playback authentication failed.', 502);
+  ttsAccessToken = tokenData.access_token;
+  ttsAccessTokenExpiry = now + Number(tokenData.expires_in || 3600);
+  return ttsAccessToken;
+}
+
+function ttsRateLimitKey(request) {
+  return request.headers.get('cf-connecting-ip')
+    || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+    || 'anonymous';
+}
+
+function enforceTtsRateLimit(request) {
+  const key = ttsRateLimitKey(request);
+  const now = Date.now();
+  const current = ttsRateLimits.get(key);
+  const entry = current && now - current.startedAt < TTS_RATE_LIMIT_WINDOW_MS
+    ? current
+    : { startedAt: now, count: 0 };
+
+  if (entry.count >= TTS_RATE_LIMIT_MAX_REQUESTS) {
+    throw new ApiError('Voice playback is temporarily rate-limited. Please try again soon.', 429);
+  }
+
+  entry.count += 1;
+  ttsRateLimits.set(key, entry);
+  if (ttsRateLimits.size > 1000) {
+    for (const [storedKey, storedEntry] of ttsRateLimits) {
+      if (now - storedEntry.startedAt >= TTS_RATE_LIMIT_WINDOW_MS) ttsRateLimits.delete(storedKey);
+    }
+  }
 }
 
 function getMessageContent(message) {
@@ -142,6 +281,69 @@ async function handleTranscription(request, env) {
   return json({ transcript });
 }
 
+async function handleTts(request, env) {
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    throw new ApiError('Please send text to speak.', 400);
+  }
+
+  const text = typeof payload?.text === 'string' ? payload.text.trim() : '';
+  if (!text || text.length > MAX_TTS_TEXT_LENGTH) {
+    throw new ApiError(`Text must be between 1 and ${MAX_TTS_TEXT_LENGTH} characters.`, 400);
+  }
+
+  enforceTtsRateLimit(request);
+
+  const { credentials, encodedCredentials } = getTtsCredentials(env);
+  const accessToken = await getGoogleAccessToken(credentials, encodedCredentials);
+  let response;
+  try {
+    response = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        input: { text },
+        voice: {
+          languageCode: env.GOOGLE_TTS_LANGUAGE || DEFAULT_TTS_LANGUAGE,
+          name: env.GOOGLE_TTS_VOICE || DEFAULT_TTS_VOICE,
+        },
+        audioConfig: { audioEncoding: 'MP3' },
+      }),
+    });
+  } catch (error) {
+    console.error('Google TTS request failed', error?.code || 'unknown');
+    throw new ApiError('Voice playback could not be generated right now.', error?.code === 8 ? 429 : 502);
+  }
+
+  if (!response.ok) {
+    console.error('Google TTS API failed', response.status);
+    throw new ApiError('Voice playback could not be generated right now.', response.status === 429 ? 429 : 502);
+  }
+
+  const responseData = await response.json().catch(() => null);
+  if (!responseData?.audioContent) {
+    throw new ApiError('Voice playback returned empty audio.', 502);
+  }
+
+  const audioBytes = Buffer.from(responseData.audioContent, 'base64');
+  if (!audioBytes.length) throw new ApiError('Voice playback returned empty audio.', 502);
+
+  return new Response(audioBytes, {
+    status: 200,
+    headers: {
+      'content-type': 'audio/mpeg',
+      'cache-control': 'private, no-store',
+      'content-length': String(audioBytes.length),
+      'x-content-type-options': 'nosniff',
+    },
+  });
+}
+
 async function handleApi(request, env, url) {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204 });
   if (url.pathname === '/api/health' && request.method === 'GET') {
@@ -154,6 +356,7 @@ async function handleApi(request, env, url) {
   }
   if (url.pathname === '/api/chat' && request.method === 'POST') return handleChat(request, env);
   if (url.pathname === '/api/transcribe' && request.method === 'POST') return handleTranscription(request, env);
+  if (url.pathname === '/api/tts' && request.method === 'POST') return handleTts(request, env);
   return json({ error: 'API route not found.' }, 404);
 }
 
@@ -176,7 +379,7 @@ const worker = {
 
       return response;
     } catch (error) {
-      console.error(error);
+      console.error('API request failed', error instanceof ApiError ? error.status : error?.code || 500);
       const status = error instanceof ApiError ? error.status : 500;
       return json({ error: error instanceof ApiError ? error.message : 'The AI service is temporarily unavailable.' }, status);
     }

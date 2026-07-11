@@ -24,6 +24,24 @@ class TestMediaRecorder {
   }
 }
 
+class TestAudio {
+  constructor(src) {
+    this.src = src;
+    this.preload = '';
+    this.onended = null;
+    this.onerror = null;
+  }
+
+  play() {
+    return new Promise((resolve) => {
+      resolve();
+      setTimeout(() => this.onended?.(), 0);
+    });
+  }
+
+  pause() {}
+}
+
 const flushPromises = async () => {
   for (let index = 0; index < 8; index += 1) await Promise.resolve();
 };
@@ -32,12 +50,16 @@ describe('Argue AI', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.stubGlobal('MediaRecorder', TestMediaRecorder);
+    vi.stubGlobal('Audio', TestAudio);
+    if (!URL.createObjectURL) URL.createObjectURL = vi.fn(() => 'blob:test-audio');
+    if (!URL.revokeObjectURL) URL.revokeObjectURL = vi.fn();
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true,
       value: { getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop: vi.fn() }] })) },
     });
     vi.stubGlobal('fetch', vi.fn(async (path, options = {}) => {
       if (path === '/api/transcribe') return { ok: true, json: async () => ({ transcript: 'AI will replace most creative jobs within five years.' }) };
+      if (path === '/api/tts') return { ok: true, blob: async () => new Blob(['mp3 audio'], { type: 'audio/mpeg' }) };
       const body = JSON.parse(options.body);
       return { ok: true, json: async () => ({ reply: body.mode === 'Brainstorm' ? 'Groq brainstorm response.' : 'Groq reasoning response.' }) };
     }));
@@ -114,11 +136,17 @@ describe('Argue AI', () => {
       await flushPromises();
     });
 
+    await act(async () => {
+      await flushPromises();
+      vi.runAllTimers();
+    });
+
     fireEvent.click(screen.getByRole('tab', { name: 'Text input' }));
     expect(screen.getByText('AI will replace most creative jobs within five years.')).toBeInTheDocument();
     expect(screen.getByText('Groq reasoning response.')).toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith('/api/transcribe', expect.objectContaining({ method: 'POST' }));
     expect(fetch).toHaveBeenCalledWith('/api/chat', expect.objectContaining({ method: 'POST' }));
+    expect(fetch).toHaveBeenCalledWith('/api/tts', expect.objectContaining({ method: 'POST' }));
   });
 
   it('cancels an active voice session when leaving the Argue screen', () => {

@@ -3,6 +3,7 @@
   "name": "argue-ai",
   "main": "./worker/index.js",
   "compatibility_date": "2026-07-07",
+  "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

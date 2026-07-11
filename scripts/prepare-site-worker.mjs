@@ -11,6 +11,7 @@ await writeFile('dist/wrangler.json', `${JSON.stringify({
   name: 'argue-ai',
   main: './server/index.js',
   compatibility_date: '2026-07-07',
+  compatibility_flags: ['nodejs_compat'],
   assets: {
     directory: './client',
     binding: 'ASSETS',

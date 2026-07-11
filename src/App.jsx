@@ -87,7 +87,9 @@ const voiceButtonLabels = {
   listening: 'STOP',
   transcribing: 'PROCESS',
   thinking: 'THINK',
+  generating: 'VOICE',
   speaking: 'SPEAK',
+  error: 'RETRY',
 };
 
 const voiceStatusCopy = {
@@ -95,7 +97,9 @@ const voiceStatusCopy = {
   listening: 'Listening · tap ARGUE when you’re done',
   transcribing: 'Turning your voice into text',
   thinking: 'Building the sharpest counterpoint',
+  generating: 'Generating the voice response',
   speaking: 'Reading the response back to you',
+  error: 'Voice playback failed · tap ARGUE to retry',
 };
 
 async function requestJson(path, options) {
@@ -103,6 +107,30 @@ async function requestJson(path, options) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || 'The AI service is unavailable right now.');
   return data;
+}
+
+async function requestTtsAudio(text, signal) {
+  const response = await fetch('/api/tts', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text }),
+    signal,
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || 'Voice playback is unavailable right now.');
+  }
+
+  const audio = await response.blob();
+  if (!audio.size) throw new Error('Voice playback returned empty audio.');
+  return audio;
+}
+
+function getPlaybackErrorMessage(error) {
+  if (error?.name === 'NotAllowedError') return 'The browser blocked automatic playback. Tap Replay to hear it.';
+  if (error?.name === 'AbortError') return 'Voice playback was cancelled.';
+  return error?.message || 'Voice playback failed. Please try again.';
 }
 
 let fallbackId = 0;
@@ -134,7 +162,32 @@ function loadSettings() {
   }
 }
 
+function SplashScreen() {
+  return (
+    <div className="splash-screen" role="status" aria-label="Opening Argue AI">
+      <div className="splash-backdrop" aria-hidden="true">
+        <span className="splash-grid" />
+        <span className="splash-halo" />
+        <span className="splash-orbit splash-orbit-outer" />
+        <span className="splash-orbit splash-orbit-inner" />
+      </div>
+      <div className="splash-content">
+        <div className="splash-core" aria-hidden="true"><Waveform size={32} weight="bold" /></div>
+        <div className="splash-brand" aria-label="Argue AI"><span>Argue</span><b>AI</b></div>
+        <span className="splash-divider" aria-hidden="true" />
+        <p className="splash-tagline">Make the case.</p>
+      </div>
+      <div className="splash-footer" aria-hidden="true">
+        <span className="splash-status-dot" />
+        <span>READY WHEN YOU ARE</span>
+        <span className="splash-progress" />
+      </div>
+    </div>
+  );
+}
+
 export function App() {
+  const [showSplash, setShowSplash] = useState(() => import.meta.env.MODE !== 'test');
   const [mode, setMode] = useState('Argue');
   const [inputMode, setInputMode] = useState('voice');
   const [activeNav, setActiveNav] = useState('Argue');
@@ -152,9 +205,21 @@ export function App() {
   const voiceChunks = useRef([]);
   const voiceCancelled = useRef(false);
   const voiceAbort = useRef(null);
+  const ttsAbort = useRef(null);
+  const ttsRequestId = useRef(0);
+  const audioRef = useRef(null);
+  const audioUrlRef = useRef(null);
+  const voiceStatusTimer = useRef(null);
   const copyTimer = useRef(null);
   const noticeTimer = useRef(null);
   const settingsTrigger = useRef(null);
+
+  useEffect(() => {
+    if (!showSplash) return undefined;
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || loadSettings().reducedMotion;
+    const timer = window.setTimeout(() => setShowSplash(false), reducedMotion ? 250 : 4200);
+    return () => window.clearTimeout(timer);
+  }, [showSplash]);
 
   const showNotice = useCallback((message) => {
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
@@ -165,6 +230,101 @@ export function App() {
   const haptic = useCallback(() => {
     if (settings.hapticsEnabled && navigator.vibrate) navigator.vibrate(10);
   }, [settings.hapticsEnabled]);
+
+  const releaseAudio = useCallback(() => {
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.onended = null;
+      audio.onerror = null;
+      audio.src = '';
+    }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+    audioRef.current = null;
+  }, []);
+
+  const cancelTtsPlayback = useCallback(() => {
+    ttsAbort.current?.abort();
+    ttsAbort.current = null;
+    ttsRequestId.current += 1;
+    releaseAudio();
+  }, [releaseAudio]);
+
+  const playTtsAudio = useCallback(async (text, { onStart, onEnd, onError } = {}) => {
+    if (!text?.trim()) {
+      onError?.(new Error('There is no text to speak.'));
+      return false;
+    }
+    if (!window.URL?.createObjectURL || typeof window.Audio !== 'function') {
+      onError?.(new Error('Audio playback is not supported in this browser.'));
+      return false;
+    }
+
+    ttsAbort.current?.abort();
+    releaseAudio();
+    const requestId = ttsRequestId.current + 1;
+    ttsRequestId.current = requestId;
+    const controller = new AbortController();
+    ttsAbort.current = controller;
+    const isCurrent = () => !controller.signal.aborted && requestId === ttsRequestId.current;
+
+    try {
+      const audioBlob = await requestTtsAudio(text, controller.signal);
+      if (!isCurrent()) return false;
+
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new window.Audio(audioUrl);
+      audio.preload = 'auto';
+      audioUrlRef.current = audioUrl;
+      audioRef.current = audio;
+      audio.onended = () => {
+        if (!isCurrent()) return;
+        releaseAudio();
+        onEnd?.();
+      };
+      audio.onerror = () => {
+        if (!isCurrent()) return;
+        releaseAudio();
+        onError?.(new Error('The audio could not be played.'));
+      };
+
+      try {
+        await audio.play();
+      } catch (error) {
+        if (!isCurrent()) return false;
+        releaseAudio();
+        onError?.(error);
+        return false;
+      }
+
+      if (!isCurrent()) {
+        releaseAudio();
+        return false;
+      }
+      onStart?.();
+      return true;
+    } catch (error) {
+      if (!isCurrent() || error.name === 'AbortError') return false;
+      releaseAudio();
+      onError?.(error);
+      return false;
+    } finally {
+      if (ttsAbort.current === controller) ttsAbort.current = null;
+    }
+  }, [releaseAudio]);
+
+  const showVoiceError = useCallback((error) => {
+    setVoiceState('error');
+    showNotice(getPlaybackErrorMessage(error));
+    if (voiceStatusTimer.current) window.clearTimeout(voiceStatusTimer.current);
+    voiceStatusTimer.current = window.setTimeout(() => {
+      voiceStatusTimer.current = null;
+      setVoiceState('idle');
+    }, 2200);
+  }, [showNotice]);
 
   useEffect(() => {
     try {
@@ -179,40 +339,29 @@ export function App() {
     voiceAbort.current?.abort();
     if (voiceRecorder.current?.state === 'recording') voiceRecorder.current.stop();
     voiceStream.current?.getTracks().forEach((track) => track.stop());
-    window.speechSynthesis?.cancel?.();
+    cancelTtsPlayback();
+    if (voiceStatusTimer.current) {
+      window.clearTimeout(voiceStatusTimer.current);
+      voiceStatusTimer.current = null;
+    }
     if (copyTimer.current) window.clearTimeout(copyTimer.current);
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
   }, []);
-
-  const speakResponse = useCallback((text, onEnd) => {
-    const synthesis = window.speechSynthesis;
-    const Utterance = window.SpeechSynthesisUtterance;
-    if (!synthesis || !Utterance) {
-      onEnd?.();
-      return false;
-    }
-
-    synthesis.cancel();
-    const utterance = new Utterance(text);
-    utterance.rate = Number(settings.speakingSpeed) || 1;
-    const preferredVoice = synthesis.getVoices?.().find((voice) => voice.name.toLowerCase().includes(settings.selectedVoice.toLowerCase()));
-    if (preferredVoice) utterance.voice = preferredVoice;
-    utterance.onend = () => onEnd?.();
-    utterance.onerror = () => onEnd?.();
-    synthesis.speak(utterance);
-    return true;
-  }, [settings.selectedVoice, settings.speakingSpeed]);
 
   const stopConversation = useCallback((announce = true) => {
     voiceCancelled.current = true;
     voiceAbort.current?.abort();
     if (voiceRecorder.current?.state === 'recording') voiceRecorder.current.stop();
     voiceStream.current?.getTracks().forEach((track) => track.stop());
-    window.speechSynthesis?.cancel?.();
+    cancelTtsPlayback();
+    if (voiceStatusTimer.current) {
+      window.clearTimeout(voiceStatusTimer.current);
+      voiceStatusTimer.current = null;
+    }
     setPlayingMessageId(null);
     setVoiceState('idle');
     if (announce) showNotice('Voice session stopped.');
-  }, [showNotice]);
+  }, [cancelTtsPlayback, showNotice]);
 
   const startVoiceSession = async () => {
     if (voiceState !== 'idle') {
@@ -245,6 +394,10 @@ export function App() {
     voiceRecorder.current = recorder;
     voiceStream.current = stream;
     voiceChunks.current = [];
+    if (voiceStatusTimer.current) {
+      window.clearTimeout(voiceStatusTimer.current);
+      voiceStatusTimer.current = null;
+    }
     setVoiceState('listening');
     haptic();
 
@@ -296,8 +449,14 @@ export function App() {
         const assistantMessage = { id: createId('voice-ai'), role: 'assistant', time: getCurrentTime(), text: response.reply };
         setMessages((current) => [...current, assistantMessage]);
         if (settings.autoPlayVoice && !voiceCancelled.current) {
-          setVoiceState('speaking');
-          if (!speakResponse(response.reply, () => setVoiceState('idle'))) setVoiceState('idle');
+          setVoiceState('generating');
+          await playTtsAudio(response.reply, {
+            onStart: () => {
+              if (!voiceCancelled.current) setVoiceState('speaking');
+            },
+            onEnd: () => setVoiceState('idle'),
+            onError: showVoiceError,
+          });
         } else {
           setVoiceState('idle');
         }
@@ -364,19 +523,25 @@ export function App() {
     }
   };
 
-  const replayMessage = (message) => {
+  const replayMessage = async (message) => {
     if (playingMessageId === message.id) {
-      window.speechSynthesis?.cancel?.();
+      cancelTtsPlayback();
       setPlayingMessageId(null);
-      showNotice('Playback paused.');
+      showNotice('Playback stopped.');
       return;
     }
 
+    cancelTtsPlayback();
     setPlayingMessageId(message.id);
-    if (!speakResponse(message.text, () => setPlayingMessageId(null))) {
-      setPlayingMessageId(null);
-      showNotice('Voice playback is unavailable in this browser.');
-    }
+    await playTtsAudio(message.text, {
+      onStart: () => setPlayingMessageId(message.id),
+      onEnd: () => setPlayingMessageId(null),
+      onError: (error) => {
+        setPlayingMessageId(null);
+        showNotice(getPlaybackErrorMessage(error));
+      },
+    });
+    setPlayingMessageId((current) => current === message.id ? null : current);
   };
 
   const openSettings = (section = 'voice') => {
@@ -397,7 +562,7 @@ export function App() {
   const navigate = (destination) => {
     haptic();
     if (destination !== activeNav && voiceState !== 'idle') stopConversation(false);
-    window.speechSynthesis?.cancel?.();
+    cancelTtsPlayback();
     setPlayingMessageId(null);
     setActiveNav(destination);
   };
@@ -418,7 +583,9 @@ export function App() {
   };
 
   return (
-    <main className={settings.reducedMotion ? 'app-stage reduced-motion' : 'app-stage'}>
+    <>
+      {showSplash && <SplashScreen />}
+      <main aria-hidden={showSplash ? 'true' : undefined} className={settings.reducedMotion ? 'app-stage reduced-motion' : 'app-stage'}>
       <section className="device-frame" aria-label="Argue AI mobile prototype">
         <div className="device-screen">
           <div className="status-bar" aria-hidden="true">
@@ -480,12 +647,13 @@ export function App() {
         />
       )}
       {notice && <div className="app-toast" role="status">{notice}</div>}
-    </main>
+      </main>
+    </>
   );
 }
 
 function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, startVoiceSession, messages, messageLimit, draft, setDraft, sendDraft, copyMessage, copiedId, playingMessageId, replayMessage, openSettings }) {
-  const activeState = voiceState === 'transcribing' ? 'thinking' : voiceState;
+  const activeState = ['transcribing', 'thinking', 'generating'].includes(voiceState) ? 'thinking' : voiceState;
   const isBusy = voiceState !== 'idle';
   const transcriptRef = useRef(null);
   const inputRef = useRef(null);
@@ -559,7 +727,6 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, startV
       {inputMode === 'voice' && (
         <section className={isBusy ? 'voice-zone busy' : 'voice-zone'} aria-label="Voice conversation control">
           <button className="voice-orbit" type="button" onClick={startVoiceSession} aria-label={isBusy ? 'Stop voice session' : 'Start voice session'}>
-            <img className="orbit-art" src="/assets/argue-orbit.png" alt="" />
             <span className="voice-core">
               <Waveform className="core-waveform" size={45} weight="bold" />
               <strong className={compactButtonText ? 'compact-label' : ''}>{buttonText}</strong>
