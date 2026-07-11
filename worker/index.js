@@ -298,6 +298,11 @@ async function handleTts(request, env) {
 
   const { credentials, encodedCredentials } = getTtsCredentials(env);
   const accessToken = await getGoogleAccessToken(credentials, encodedCredentials);
+  const languageCode = env.GOOGLE_TTS_LANGUAGE || DEFAULT_TTS_LANGUAGE;
+  const configuredVoice = env.GOOGLE_TTS_VOICE || DEFAULT_TTS_VOICE;
+  const voiceName = configuredVoice.startsWith(`${languageCode}-`)
+    ? configuredVoice
+    : `${languageCode}-${configuredVoice}`;
   let response;
   try {
     response = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
@@ -309,8 +314,8 @@ async function handleTts(request, env) {
       body: JSON.stringify({
         input: { text },
         voice: {
-          languageCode: env.GOOGLE_TTS_LANGUAGE || DEFAULT_TTS_LANGUAGE,
-          name: env.GOOGLE_TTS_VOICE || DEFAULT_TTS_VOICE,
+          languageCode,
+          name: voiceName,
         },
         audioConfig: { audioEncoding: 'MP3' },
       }),
