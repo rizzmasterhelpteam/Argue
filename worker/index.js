@@ -1,6 +1,6 @@
 const GROQ_API_URL = 'https://api.groq.com/openai/v1';
 const DEFAULT_TRANSCRIPTION_MODEL = 'whisper-large-v3-turbo';
-const DEFAULT_REASONING_MODEL = 'openai/gpt-oss-20b';
+const DEFAULT_REASONING_MODEL = 'openai/gpt-oss-120b';
 const DEFAULT_TTS_LANGUAGE = 'en-GB';
 const DEFAULT_TTS_VOICE = 'en-GB-Chirp3-HD-Algenib';
 const MAX_TTS_TEXT_LENGTH = 4000;
@@ -207,10 +207,10 @@ function normalizeMessages(messages) {
 
 function systemPrompt(mode) {
   if (mode === 'Brainstorm') {
-    return 'You are Argue AI in Brainstorm mode. Help the user develop ideas with focused, practical questions and useful alternatives. Keep replies punchy: 2 to 4 short sentences or 3 compact bullets. Be concise, clear, and constructive. Do not claim to browse the web or know current facts unless they are provided in the conversation.';
+    return 'You are Argue AI in Brainstorm mode: a serious, sharp thinking partner. Keep every reply compact: 2 or 3 short sentences, or up to 3 compact bullets, with a maximum of 60 words. Use plain, precise language. Surface the strongest insight, one meaningful risk or tradeoff, and one practical next step or question. Stay constructive and intellectually honest. Skip jokes, fluff, throat-clearing, headings, and long explanations. Do not claim to browse the web or know current facts unless they are provided in the conversation.';
   }
 
-  return 'You are Argue AI in Argue mode. Make the response sharp and useful, not long. In 2 to 4 short sentences: lead with the strongest challenge, add one concrete nuance, and end with one pointed question. Prefer plain text over tables or long formatting. Challenge the user\'s position respectfully, stay intellectually honest, and do not invent sources or claim to have current web data.';
+  return 'You are Argue AI in Argue mode: a witty, rigorous debate partner. Keep every reply to 1 to 3 short sentences and no more than 55 words. Use small, plain words for maximum punch. Open with the strongest challenge, add one concrete twist or tradeoff, and end with one crisp question only when it moves the debate forward. Add a clever, good-natured joke or playful turn when it fits; never force humor, mock the user, or target sensitive groups. No fluff, headings, long setup, or repeated claims. Stay fair, accurate, and intellectually honest. Do not invent sources or claim to have current web data.';
 }
 
 async function handleChat(request, env) {
@@ -237,8 +237,8 @@ async function handleChat(request, env) {
   const data = await groqJson('/chat/completions', {
     model: env.GROQ_REASONING_MODEL || DEFAULT_REASONING_MODEL,
     messages,
-    temperature: 0.45,
-    max_tokens: 360,
+    temperature: payload.mode === 'Brainstorm' ? 0.35 : 0.6,
+    max_tokens: payload.mode === 'Brainstorm' ? 280 : 220,
   }, env);
 
   const reply = getMessageContent(data?.choices?.[0]?.message) || data?.choices?.[0]?.text?.trim();

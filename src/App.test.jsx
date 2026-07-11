@@ -25,11 +25,16 @@ class TestMediaRecorder {
 }
 
 class TestAudio {
+  static instances = [];
+
   constructor(src) {
     this.src = src;
     this.preload = '';
+    this.defaultPlaybackRate = 1;
+    this.playbackRate = 1;
     this.onended = null;
     this.onerror = null;
+    TestAudio.instances.push(this);
   }
 
   play() {
@@ -40,6 +45,38 @@ class TestAudio {
   }
 
   pause() {}
+}
+
+class TestAudioContext {
+  constructor() {
+    this.state = 'running';
+    this.frame = 0;
+    this.analyser = {
+      fftSize: 2048,
+      getByteTimeDomainData: (data) => {
+        this.frame += 1;
+        data.fill(this.frame < 30 ? 160 : 128);
+      },
+      disconnect: vi.fn(),
+    };
+  }
+
+  createAnalyser() {
+    return this.analyser;
+  }
+
+  createMediaStreamSource() {
+    return { connect: vi.fn(), disconnect: vi.fn() };
+  }
+
+  resume() {
+    return Promise.resolve();
+  }
+
+  close() {
+    this.state = 'closed';
+    return Promise.resolve();
+  }
 }
 
 const flushPromises = async () => {
@@ -147,6 +184,38 @@ describe('Argue AI', () => {
     expect(fetch).toHaveBeenCalledWith('/api/transcribe', expect.objectContaining({ method: 'POST' }));
     expect(fetch).toHaveBeenCalledWith('/api/chat', expect.objectContaining({ method: 'POST' }));
     expect(fetch).toHaveBeenCalledWith('/api/tts', expect.objectContaining({ method: 'POST' }));
+    expect(TestAudio.instances.at(-1).playbackRate).toBe(1.5);
+  });
+
+  it('automatically sends voice after a sustained pause', async () => {
+    let simulatedTime = 0;
+    const performanceNow = vi.spyOn(performance, 'now').mockImplementation(() => simulatedTime);
+    vi.stubGlobal('AudioContext', TestAudioContext);
+    vi.stubGlobal('requestAnimationFrame', (callback) => setTimeout(() => {
+      simulatedTime += 16;
+      callback(simulatedTime);
+    }, 16));
+    vi.stubGlobal('cancelAnimationFrame', (timerId) => clearTimeout(timerId));
+
+    render(<App />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start voice session' }));
+      await flushPromises();
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(2400);
+      await flushPromises();
+    });
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+      await flushPromises();
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Text input' }));
+    expect(screen.getByText('AI will replace most creative jobs within five years.')).toBeInTheDocument();
+    expect(screen.getByText('Groq reasoning response.')).toBeInTheDocument();
+    performanceNow.mockRestore();
   });
 
   it('cancels an active voice session when leaving the Argue screen', () => {
@@ -182,6 +251,7 @@ describe('Argue AI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open voice settings' }));
     const toggle = screen.getByRole('switch', { name: 'Automatic voice playback' });
     expect(toggle).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByRole('combobox', { name: 'Speaking speed' })).not.toBeInTheDocument();
     fireEvent.click(toggle);
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     act(() => vi.advanceTimersByTime(1));

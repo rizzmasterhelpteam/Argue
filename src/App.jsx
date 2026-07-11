@@ -25,11 +25,15 @@ import {
 } from '@phosphor-icons/react';
 
 const SETTINGS_KEY = 'argue-ai-settings';
+const AUTO_STOP_SILENCE_MS = 1200;
+const AUTO_STOP_MIN_SPEECH_MS = 350;
+const VOICE_ACTIVITY_THRESHOLD = 0.045;
+const VOICE_PLAYBACK_RATE = 1.5;
 
 const defaultSettings = {
   autoPlayVoice: true,
   selectedVoice: 'Nova',
-  speakingSpeed: '1.0',
+  speakingSpeed: String(VOICE_PLAYBACK_RATE),
   hapticsEnabled: true,
   compactTranscript: false,
   reducedMotion: false,
@@ -102,6 +106,8 @@ const voiceStatusCopy = {
   error: 'Voice playback failed · tap ARGUE to retry',
 };
 
+voiceStatusCopy.listening = 'Listening - pause to send automatically';
+
 async function requestJson(path, options) {
   const response = await fetch(path, options);
   const data = await response.json().catch(() => ({}));
@@ -156,7 +162,7 @@ function createAssistantResponse(mode, input) {
 function loadSettings() {
   try {
     const saved = window.localStorage.getItem(SETTINGS_KEY);
-    return saved ? { ...defaultSettings, ...JSON.parse(saved) } : defaultSettings;
+    return saved ? { ...defaultSettings, ...JSON.parse(saved), speakingSpeed: String(VOICE_PLAYBACK_RATE) } : defaultSettings;
   } catch {
     return defaultSettings;
   }
@@ -168,8 +174,6 @@ function SplashScreen() {
       <div className="splash-backdrop" aria-hidden="true">
         <span className="splash-grid" />
         <span className="splash-halo" />
-        <span className="splash-orbit splash-orbit-outer" />
-        <span className="splash-orbit splash-orbit-inner" />
       </div>
       <div className="splash-content">
         <div className="splash-core" aria-hidden="true"><Waveform size={32} weight="bold" /></div>
@@ -210,6 +214,10 @@ export function App() {
   const audioRef = useRef(null);
   const audioUrlRef = useRef(null);
   const voiceStatusTimer = useRef(null);
+  const voiceAudioContext = useRef(null);
+  const voiceAudioSource = useRef(null);
+  const voiceAnalyser = useRef(null);
+  const voiceActivityFrame = useRef(null);
   const copyTimer = useRef(null);
   const noticeTimer = useRef(null);
   const settingsTrigger = useRef(null);
@@ -278,6 +286,8 @@ export function App() {
       const audioUrl = URL.createObjectURL(audioBlob);
       const audio = new window.Audio(audioUrl);
       audio.preload = 'auto';
+      audio.defaultPlaybackRate = VOICE_PLAYBACK_RATE;
+      audio.playbackRate = VOICE_PLAYBACK_RATE;
       audioUrlRef.current = audioUrl;
       audioRef.current = audio;
       audio.onended = () => {
@@ -326,6 +336,70 @@ export function App() {
     }, 2200);
   }, [showNotice]);
 
+  const stopVoiceActivityMonitor = useCallback(() => {
+    if (voiceActivityFrame.current !== null) {
+      window.cancelAnimationFrame?.(voiceActivityFrame.current);
+      voiceActivityFrame.current = null;
+    }
+    voiceAudioSource.current?.disconnect();
+    voiceAnalyser.current?.disconnect();
+    voiceAudioSource.current = null;
+    voiceAnalyser.current = null;
+    const context = voiceAudioContext.current;
+    voiceAudioContext.current = null;
+    if (context && context.state !== 'closed') context.close().catch(() => {});
+  }, []);
+
+  const startVoiceActivityMonitor = useCallback((stream, recorder) => {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (typeof AudioContextClass !== 'function' || typeof window.requestAnimationFrame !== 'function') return;
+
+    try {
+      const context = new AudioContextClass();
+      const analyser = context.createAnalyser();
+      const source = context.createMediaStreamSource(stream);
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+      voiceAudioContext.current = context;
+      voiceAudioSource.current = source;
+      voiceAnalyser.current = analyser;
+
+      const samples = new Uint8Array(analyser.fftSize);
+      const startedAt = performance.now();
+      let lastSpeechAt = startedAt;
+      let sawSpeech = false;
+
+      const monitor = () => {
+        if (voiceAnalyser.current !== analyser || recorder.state !== 'recording') return;
+        analyser.getByteTimeDomainData(samples);
+        let sum = 0;
+        for (const sample of samples) {
+          const normalized = (sample - 128) / 128;
+          sum += normalized * normalized;
+        }
+        const rms = Math.sqrt(sum / samples.length);
+        const now = performance.now();
+        if (rms > VOICE_ACTIVITY_THRESHOLD) {
+          sawSpeech = true;
+          lastSpeechAt = now;
+        }
+
+        if (sawSpeech && now - startedAt >= AUTO_STOP_MIN_SPEECH_MS && now - lastSpeechAt >= AUTO_STOP_SILENCE_MS) {
+          stopVoiceActivityMonitor();
+          recorder.stop();
+          return;
+        }
+
+        voiceActivityFrame.current = window.requestAnimationFrame(monitor);
+      };
+
+      context.resume?.().catch(() => {});
+      voiceActivityFrame.current = window.requestAnimationFrame(monitor);
+    } catch {
+      stopVoiceActivityMonitor();
+    }
+  }, [stopVoiceActivityMonitor]);
+
   useEffect(() => {
     try {
       window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
@@ -337,6 +411,7 @@ export function App() {
   useEffect(() => () => {
     voiceCancelled.current = true;
     voiceAbort.current?.abort();
+    stopVoiceActivityMonitor();
     if (voiceRecorder.current?.state === 'recording') voiceRecorder.current.stop();
     voiceStream.current?.getTracks().forEach((track) => track.stop());
     cancelTtsPlayback();
@@ -346,11 +421,12 @@ export function App() {
     }
     if (copyTimer.current) window.clearTimeout(copyTimer.current);
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
-  }, []);
+  }, [cancelTtsPlayback, stopVoiceActivityMonitor]);
 
   const stopConversation = useCallback((announce = true) => {
     voiceCancelled.current = true;
     voiceAbort.current?.abort();
+    stopVoiceActivityMonitor();
     if (voiceRecorder.current?.state === 'recording') voiceRecorder.current.stop();
     voiceStream.current?.getTracks().forEach((track) => track.stop());
     cancelTtsPlayback();
@@ -361,7 +437,7 @@ export function App() {
     setPlayingMessageId(null);
     setVoiceState('idle');
     if (announce) showNotice('Voice session stopped.');
-  }, [cancelTtsPlayback, showNotice]);
+  }, [cancelTtsPlayback, showNotice, stopVoiceActivityMonitor]);
 
   const startVoiceSession = async () => {
     if (voiceState !== 'idle') {
@@ -405,11 +481,13 @@ export function App() {
       if (event.data?.size) voiceChunks.current.push(event.data);
     };
     recorder.onerror = () => {
+      stopVoiceActivityMonitor();
       stream.getTracks().forEach((track) => track.stop());
       setVoiceState('idle');
       showNotice('The recording could not be started.');
     };
     recorder.onstop = async () => {
+      stopVoiceActivityMonitor();
       stream.getTracks().forEach((track) => track.stop());
       voiceRecorder.current = null;
       voiceStream.current = null;
@@ -469,6 +547,7 @@ export function App() {
     };
 
     recorder.start(250);
+    startVoiceActivityMonitor(stream, recorder);
   };
 
   const sendDraft = async (event) => {
@@ -962,15 +1041,17 @@ function SettingsSheet({ section, settings, onChange, onClose }) {
             <label className="sheet-setting">
               <div><strong>AI voice</strong><span>Choose the response voice</span></div>
               <select className="setting-select" value={settings.selectedVoice} onChange={(event) => onChange({ selectedVoice: event.target.value })} aria-label="AI voice">
-                <option>Nova</option><option>Ember</option><option>Atlas</option>
+                <option>Nova</option><option>Ember</option>
               </select>
             </label>
+            {false && (
             <label className="sheet-setting">
               <div><strong>Speaking speed</strong><span>Control response playback speed</span></div>
               <select className="setting-select" value={settings.speakingSpeed} onChange={(event) => onChange({ speakingSpeed: event.target.value })} aria-label="Speaking speed">
                 <option value="0.8">0.8×</option><option value="1.0">1.0×</option><option value="1.2">1.2×</option>
               </select>
             </label>
+            )}
           </>
         ) : (
           <>
