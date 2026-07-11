@@ -228,6 +228,8 @@ async function handleChat(request, env) {
 
   const history = normalizeMessages(payload.messages);
   const lastMessage = history.at(-1);
+  const model = env.GROQ_REASONING_MODEL || DEFAULT_REASONING_MODEL;
+  const isGptOss = model === 'openai/gpt-oss-20b' || model === 'openai/gpt-oss-120b';
   const messages = [
     { role: 'system', content: systemPrompt(payload.mode) },
     ...history,
@@ -235,10 +237,11 @@ async function handleChat(request, env) {
   ];
 
   const data = await groqJson('/chat/completions', {
-    model: env.GROQ_REASONING_MODEL || DEFAULT_REASONING_MODEL,
+    model,
     messages,
     temperature: payload.mode === 'Brainstorm' ? 0.35 : 0.6,
-    max_tokens: payload.mode === 'Brainstorm' ? 280 : 220,
+    max_completion_tokens: 512,
+    ...(isGptOss ? { reasoning_effort: 'low' } : {}),
   }, env);
 
   const reply = getMessageContent(data?.choices?.[0]?.message) || data?.choices?.[0]?.text?.trim();
