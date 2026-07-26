@@ -3,70 +3,76 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 
-class TestMediaRecorder {
-  static isTypeSupported() {
-    return true;
-  }
-
-  constructor() {
-    this.state = 'inactive';
-    this.mimeType = 'audio/webm';
-  }
-
-  start() {
-    this.state = 'recording';
-  }
-
-  stop() {
-    this.state = 'inactive';
-    this.ondataavailable?.({ data: new Blob(['voice sample'], { type: this.mimeType }) });
-    this.onstop?.();
-  }
-}
-
-class TestAudio {
+class TestWebSocket {
   static instances = [];
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
 
-  constructor(src) {
-    this.src = src;
-    this.preload = '';
-    this.defaultPlaybackRate = 1;
-    this.playbackRate = 1;
-    this.onended = null;
+  constructor(url) {
+    this.url = url;
+    this.readyState = TestWebSocket.CONNECTING;
+    this.sent = [];
+    this.onopen = null;
+    this.onmessage = null;
     this.onerror = null;
-    TestAudio.instances.push(this);
+    this.onclose = null;
+    TestWebSocket.instances.push(this);
+    Promise.resolve().then(() => this.open());
   }
 
-  play() {
-    return new Promise((resolve) => {
-      resolve();
-      setTimeout(() => this.onended?.(), 0);
-    });
+  open() {
+    if (this.readyState !== TestWebSocket.CONNECTING) return;
+    this.readyState = TestWebSocket.OPEN;
+    this.onopen?.();
   }
 
-  pause() {}
+  send(message) {
+    this.sent.push(JSON.parse(message));
+  }
+
+  emit(message) {
+    this.onmessage?.({ data: JSON.stringify(message) });
+  }
+
+  close(code = 1000, reason = 'closed') {
+    if (this.readyState === TestWebSocket.CLOSED) return;
+    this.readyState = TestWebSocket.CLOSED;
+    this.onclose?.({ code, reason });
+  }
 }
 
 class TestAudioContext {
   constructor() {
     this.state = 'running';
-    this.frame = 0;
-    this.analyser = {
-      fftSize: 2048,
-      getByteTimeDomainData: (data) => {
-        this.frame += 1;
-        data.fill(this.frame < 30 ? 160 : 128);
-      },
-      disconnect: vi.fn(),
-    };
-  }
-
-  createAnalyser() {
-    return this.analyser;
+    this.sampleRate = 48000;
+    this.currentTime = 0;
+    this.destination = {};
   }
 
   createMediaStreamSource() {
     return { connect: vi.fn(), disconnect: vi.fn() };
+  }
+
+  createScriptProcessor() {
+    return { onaudioprocess: null, connect: vi.fn(), disconnect: vi.fn() };
+  }
+
+  createGain() {
+    return { gain: { value: 1 }, connect: vi.fn(), disconnect: vi.fn() };
+  }
+
+  createBuffer(_channels, length, sampleRate) {
+    const channel = new Float32Array(length);
+    return {
+      duration: length / sampleRate,
+      copyToChannel: vi.fn((samples) => channel.set(samples)),
+      getChannelData: () => channel,
+    };
+  }
+
+  createBufferSource() {
+    return { buffer: null, connect: vi.fn(), disconnect: vi.fn(), start: vi.fn(), stop: vi.fn(), onended: null };
   }
 
   resume() {
@@ -86,17 +92,24 @@ const flushPromises = async () => {
 describe('Argue AI', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.stubGlobal('MediaRecorder', TestMediaRecorder);
-    vi.stubGlobal('Audio', TestAudio);
-    if (!URL.createObjectURL) URL.createObjectURL = vi.fn(() => 'blob:test-audio');
-    if (!URL.revokeObjectURL) URL.revokeObjectURL = vi.fn();
+    TestWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', TestWebSocket);
+    vi.stubGlobal('AudioContext', TestAudioContext);
+    vi.stubGlobal('speechSynthesis', { speak: vi.fn(), cancel: vi.fn(), getVoices: vi.fn(() => []) });
+    vi.stubGlobal('SpeechSynthesisUtterance', class {
+      constructor(text) {
+        this.text = text;
+        this.rate = 1;
+        this.onend = null;
+        this.onerror = null;
+      }
+    });
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true,
       value: { getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop: vi.fn() }] })) },
     });
     vi.stubGlobal('fetch', vi.fn(async (path, options = {}) => {
-      if (path === '/api/transcribe') return { ok: true, json: async () => ({ transcript: 'AI will replace most creative jobs within five years.' }) };
-      if (path === '/api/tts') return { ok: true, blob: async () => new Blob(['mp3 audio'], { type: 'audio/mpeg' }) };
+      if (path === '/api/live-token') return { ok: true, json: async () => ({ token: 'ephemeral-test-token', model: 'gemini-3.1-flash-live-preview', voice: 'Kore' }) };
       const body = JSON.parse(options.body);
       return { ok: true, json: async () => ({ reply: body.mode === 'Brainstorm' ? 'Groq brainstorm response.' : 'Groq reasoning response.' }) };
     }));
@@ -159,7 +172,7 @@ describe('Argue AI', () => {
     expect(fetch).toHaveBeenCalledWith('/api/chat', expect.objectContaining({ method: 'POST' }));
   });
 
-  it('records voice, transcribes with Whisper, and sends the transcript to Groq', async () => {
+  it('connects voice to Gemini Live and streams live turns', async () => {
     render(<App />);
 
     await act(async () => {
@@ -169,34 +182,28 @@ describe('Argue AI', () => {
     expect(screen.getByText('Voice status: listening')).toBeInTheDocument();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Stop voice session' }));
+      const socket = TestWebSocket.instances.at(-1);
+      expect(socket.url).toContain('BidiGenerateContentConstrained');
+      expect(socket.sent[0].setup.model).toBe('models/gemini-3.1-flash-live-preview');
+      expect(socket.sent[0].setup.responseModalities).toEqual(['AUDIO']);
+      socket.emit({ serverContent: { inputTranscription: { text: 'AI will replace most creative jobs within five years.' } } });
+      socket.emit({ serverContent: { outputTranscription: { text: 'That claim needs evidence.' }, turnComplete: true } });
       await flushPromises();
     });
 
     await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Stop voice session' }));
       await flushPromises();
-      vi.runAllTimers();
     });
-
     fireEvent.click(screen.getByRole('tab', { name: 'Text input' }));
     expect(screen.getByText('AI will replace most creative jobs within five years.')).toBeInTheDocument();
-    expect(screen.getByText('Groq reasoning response.')).toBeInTheDocument();
-    expect(fetch).toHaveBeenCalledWith('/api/transcribe', expect.objectContaining({ method: 'POST' }));
-    expect(fetch).toHaveBeenCalledWith('/api/chat', expect.objectContaining({ method: 'POST' }));
-    expect(fetch).toHaveBeenCalledWith('/api/tts', expect.objectContaining({ method: 'POST' }));
-    expect(TestAudio.instances.at(-1).playbackRate).toBe(1.5);
+    expect(screen.getByText('That claim needs evidence.')).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith('/api/live-token', expect.objectContaining({ method: 'POST' }));
+    expect(fetch).not.toHaveBeenCalledWith('/api/transcribe', expect.anything());
+    expect(fetch).not.toHaveBeenCalledWith('/api/tts', expect.anything());
   });
 
-  it('automatically sends voice after a sustained pause', async () => {
-    let simulatedTime = 0;
-    const performanceNow = vi.spyOn(performance, 'now').mockImplementation(() => simulatedTime);
-    vi.stubGlobal('AudioContext', TestAudioContext);
-    vi.stubGlobal('requestAnimationFrame', (callback) => setTimeout(() => {
-      simulatedTime += 16;
-      callback(simulatedTime);
-    }, 16));
-    vi.stubGlobal('cancelAnimationFrame', (timerId) => clearTimeout(timerId));
-
+  it('keeps the live voice session open while Gemini handles pauses automatically', async () => {
     render(<App />);
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Start voice session' }));
@@ -207,15 +214,11 @@ describe('Argue AI', () => {
       vi.advanceTimersByTime(2400);
       await flushPromises();
     });
-    await act(async () => {
-      vi.runOnlyPendingTimers();
-      await flushPromises();
-    });
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Text input' }));
-    expect(screen.getByText('AI will replace most creative jobs within five years.')).toBeInTheDocument();
-    expect(screen.getByText('Groq reasoning response.')).toBeInTheDocument();
-    performanceNow.mockRestore();
+    const socket = TestWebSocket.instances.at(-1);
+    expect(screen.getByText('Voice status: listening')).toBeInTheDocument();
+    expect(socket.readyState).toBe(TestWebSocket.OPEN);
+    expect(socket.sent[0].setup.realtimeInputConfig.automaticActivityDetection.disabled).toBe(false);
   });
 
   it('cancels an active voice session when leaving the Argue screen', () => {
