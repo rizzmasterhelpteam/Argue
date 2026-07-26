@@ -1,9 +1,8 @@
 const GROQ_API_URL = 'https://api.groq.com/openai/v1';
-// Ephemeral Live API tokens are provisioned and consumed through v1alpha.
-// The regular API/WebSocket endpoint remains v1beta, but the constrained
-// endpoint rejects an ephemeral token when it is addressed through v1beta.
-const GEMINI_AUTH_TOKEN_URL = 'https://generativelanguage.googleapis.com/v1alpha/auth_tokens';
-const GEMINI_LIVE_API_VERSION = 'v1alpha';
+// Gemini's current ephemeral-token REST and constrained WebSocket endpoints
+// are both served from v1beta.
+const GEMINI_AUTH_TOKEN_URL = 'https://generativelanguage.googleapis.com/v1beta/auth_tokens';
+const GEMINI_LIVE_API_VERSION = 'v1beta';
 const DEFAULT_REASONING_MODEL = 'openai/gpt-oss-120b';
 const DEFAULT_GEMINI_LIVE_MODEL = 'gemini-3.1-flash-live-preview';
 const DEFAULT_GEMINI_LIVE_VOICE = 'Kore';

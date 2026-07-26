@@ -179,13 +179,20 @@ describe('Argue AI', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Start voice session' }));
       await flushPromises();
     });
+
+    const socket = TestWebSocket.instances.at(-1);
+    expect(socket.url).toContain('google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained');
+    expect(socket.sent[0].setup.model).toBe('models/gemini-3.1-flash-live-preview');
+    expect(socket.sent[0].setup.generationConfig.responseModalities).toEqual(['AUDIO']);
+    expect(socket.sent).toHaveLength(1);
+
+    await act(async () => {
+      socket.emit({ setupComplete: {} });
+      await flushPromises();
+    });
     expect(screen.getByText('Voice status: listening')).toBeInTheDocument();
 
     await act(async () => {
-      const socket = TestWebSocket.instances.at(-1);
-      expect(socket.url).toContain('google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained');
-      expect(socket.sent[0].setup.model).toBe('models/gemini-3.1-flash-live-preview');
-      expect(socket.sent[0].setup.generationConfig.responseModalities).toEqual(['AUDIO']);
       socket.emit({ serverContent: { inputTranscription: { text: 'AI will replace most creative jobs within five years.' } } });
       socket.emit({ serverContent: { outputTranscription: { text: 'That claim needs evidence.' }, turnComplete: true } });
       await flushPromises();
@@ -210,12 +217,17 @@ describe('Argue AI', () => {
       await flushPromises();
     });
 
+    const socket = TestWebSocket.instances.at(-1);
+    await act(async () => {
+      socket.emit({ setupComplete: {} });
+      await flushPromises();
+    });
+
     await act(async () => {
       vi.advanceTimersByTime(2400);
       await flushPromises();
     });
 
-    const socket = TestWebSocket.instances.at(-1);
     expect(screen.getByText('Voice status: listening')).toBeInTheDocument();
     expect(socket.readyState).toBe(TestWebSocket.OPEN);
     expect(socket.sent[0].setup.realtimeInputConfig.automaticActivityDetection.disabled).toBe(false);

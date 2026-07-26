@@ -35,7 +35,7 @@ const SETTINGS_KEY = 'argue-ai-settings';
 const VOICE_PLAYBACK_RATE = 1.5;
 const LIVE_INPUT_SAMPLE_RATE = 16000;
 const LIVE_OUTPUT_SAMPLE_RATE = 24000;
-const LIVE_API_VERSION = 'v1alpha';
+const LIVE_API_VERSION = 'v1beta';
 
 const defaultSettings = {
   autoPlayVoice: true,
@@ -96,10 +96,10 @@ const historyItems = [
 
 const voiceButtonLabels = {
   listening: 'STOP',
-  transcribing: 'PROCESS',
-  thinking: 'THINK',
-  generating: 'VOICE',
-  speaking: 'SPEAK',
+  transcribing: 'STOP',
+  thinking: 'STOP',
+  generating: 'STOP',
+  speaking: 'STOP',
   error: 'RETRY',
 };
 
@@ -114,6 +114,11 @@ const voiceStatusCopy = {
 };
 
 voiceStatusCopy.listening = 'Listening - pause to send automatically';
+voiceStatusCopy.idle = 'Tap ARGUE to speak';
+voiceStatusCopy.listening = 'Listening - pause to send automatically - tap ARGUE to stop';
+voiceStatusCopy.thinking = 'Thinking - tap ARGUE to stop';
+voiceStatusCopy.generating = 'Generating the voice response - tap ARGUE to stop';
+voiceStatusCopy.speaking = 'Speaking - tap ARGUE to stop';
 
 async function requestJson(path, options) {
   const response = await fetch(path, options);
@@ -123,6 +128,7 @@ async function requestJson(path, options) {
 }
 
 async function requestLiveToken(mode, signal) {
+  voiceDebug('token requested', { mode });
   const response = await fetch('/api/live-token', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -137,6 +143,7 @@ async function requestLiveToken(mode, signal) {
 
   const data = await response.json().catch(() => null);
   if (!data?.token || !data?.model) throw new Error('Gemini Live returned an invalid session token.');
+  voiceDebug('token received', { model: data.model, apiVersion: data.apiVersion || LIVE_API_VERSION });
   return data;
 }
 
@@ -199,6 +206,10 @@ function getPlaybackErrorMessage(error) {
   if (error?.name === 'NotAllowedError') return 'The browser blocked automatic playback. Tap Replay to hear it.';
   if (error?.name === 'AbortError') return 'Voice playback was cancelled.';
   return error?.message || 'Voice playback failed. Please try again.';
+}
+
+function voiceDebug(stage, details) {
+  if (import.meta.env?.DEV) console.debug(`[Argue AI voice] ${stage}`, details || '');
 }
 
 let fallbackId = 0;
@@ -286,6 +297,7 @@ export function App() {
   const liveOutputSources = useRef(new Set());
   const liveOutputNextTime = useRef(0);
   const liveOutputPendingTurn = useRef(false);
+  const liveSetupReady = useRef(false);
   const liveInputTranscript = useRef('');
   const liveOutputTranscript = useRef('');
   const liveUserMessageId = useRef(null);
@@ -430,6 +442,7 @@ export function App() {
       }
     };
     source.start(startAt);
+    voiceDebug('audio queued');
     setVoiceState('speaking');
   }, [settings.autoPlayVoice]);
 
@@ -446,6 +459,7 @@ export function App() {
 
     const serverContent = payload?.serverContent;
     if (!serverContent) return;
+    voiceDebug('response received');
 
     if (serverContent.interrupted) {
       stopLiveAudio();
@@ -478,6 +492,7 @@ export function App() {
     }
 
     if (serverContent.turnComplete) {
+      voiceDebug('turn complete');
       finalizeLiveTurn();
       liveOutputPendingTurn.current = true;
       if (liveOutputSources.current.size === 0) {
@@ -489,6 +504,7 @@ export function App() {
 
   const stopLiveSession = useCallback((announce = true) => {
     liveSessionId.current += 1;
+    liveSetupReady.current = false;
     liveTokenAbort.current?.abort();
     liveTokenAbort.current = null;
     const socket = liveSocket.current;
@@ -587,11 +603,17 @@ export function App() {
 
     const sessionId = liveSessionId.current + 1;
     liveSessionId.current = sessionId;
+    liveSetupReady.current = false;
     const controller = new AbortController();
     liveTokenAbort.current = controller;
 
     let stream;
     try {
+      const outputContext = new AudioContextClass();
+      liveOutputContext.current = outputContext;
+      const outputResume = outputContext.resume?.();
+      outputResume?.catch?.(() => {});
+
       stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -606,8 +628,6 @@ export function App() {
       }
 
       liveStream.current = stream;
-      const outputContext = new AudioContextClass();
-      liveOutputContext.current = outputContext;
       await outputContext.resume?.();
       setVoiceState('thinking');
       haptic();
@@ -621,10 +641,12 @@ export function App() {
 
       const apiVersion = token.apiVersion || LIVE_API_VERSION;
       const socket = new window.WebSocket(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${apiVersion}.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(token.token)}`);
+      socket.binaryType = 'arraybuffer';
       liveSocket.current = socket;
       socket.onopen = () => {
         if (liveSessionId.current !== sessionId) return;
         try {
+          voiceDebug('socket opened');
           socket.send(JSON.stringify({
             setup: {
               model: `models/${token.model}`,
@@ -647,14 +669,43 @@ export function App() {
               },
             },
           }));
-          startLiveMicrophone(stream, socket, sessionId);
-          setVoiceState('listening');
+          voiceDebug('setup sent', { apiVersion, model: token.model });
+          setVoiceState('thinking');
         } catch (error) {
           stopLiveSession(false);
           showVoiceError(error);
         }
       };
-      socket.onmessage = (event) => handleLiveMessage(event, sessionId);
+      socket.onmessage = (event) => {
+        let payload;
+        try {
+          const raw = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
+          payload = JSON.parse(raw);
+        } catch {
+          payload = null;
+        }
+
+        if (payload?.setupComplete && liveSessionId.current === sessionId && !liveSetupReady.current) {
+          try {
+            liveSetupReady.current = true;
+            startLiveMicrophone(stream, socket, sessionId);
+            voiceDebug('setup complete; microphone started');
+            setVoiceState('listening');
+          } catch (error) {
+            stopLiveSession(false);
+            showVoiceError(error);
+            return;
+          }
+        }
+
+        if (payload?.error && liveSessionId.current === sessionId) {
+          stopLiveSession(false);
+          showVoiceError(new Error('Gemini Live rejected the session setup.'));
+          return;
+        }
+
+        handleLiveMessage(event, sessionId);
+      };
       socket.onerror = () => {
         if (liveSessionId.current !== sessionId) return;
         stopLiveSession(false);
@@ -662,6 +713,7 @@ export function App() {
       };
       socket.onclose = (event) => {
         if (liveSessionId.current !== sessionId) return;
+        voiceDebug('socket closed', { code: event.code });
         stopLiveSession(false);
         if (event.code !== 1000) showVoiceError(new Error('Gemini Live disconnected.'));
       };
