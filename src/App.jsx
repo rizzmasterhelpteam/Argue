@@ -35,6 +35,7 @@ const SETTINGS_KEY = 'argue-ai-settings';
 const VOICE_PLAYBACK_RATE = 1.5;
 const LIVE_INPUT_SAMPLE_RATE = 16000;
 const LIVE_OUTPUT_SAMPLE_RATE = 24000;
+const LIVE_API_VERSION = 'v1alpha';
 
 const defaultSettings = {
   autoPlayVoice: true,
@@ -618,7 +619,8 @@ export function App() {
         return;
       }
 
-      const socket = new window.WebSocket(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(token.token)}`);
+      const apiVersion = token.apiVersion || LIVE_API_VERSION;
+      const socket = new window.WebSocket(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${apiVersion}.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(token.token)}`);
       liveSocket.current = socket;
       socket.onopen = () => {
         if (liveSessionId.current !== sessionId) return;

@@ -183,7 +183,7 @@ describe('Argue AI', () => {
 
     await act(async () => {
       const socket = TestWebSocket.instances.at(-1);
-      expect(socket.url).toContain('BidiGenerateContentConstrained');
+      expect(socket.url).toContain('google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained');
       expect(socket.sent[0].setup.model).toBe('models/gemini-3.1-flash-live-preview');
       expect(socket.sent[0].setup.responseModalities).toEqual(['AUDIO']);
       socket.emit({ serverContent: { inputTranscription: { text: 'AI will replace most creative jobs within five years.' } } });
