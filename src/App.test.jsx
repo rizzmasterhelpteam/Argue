@@ -185,7 +185,7 @@ describe('Argue AI', () => {
       const socket = TestWebSocket.instances.at(-1);
       expect(socket.url).toContain('google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained');
       expect(socket.sent[0].setup.model).toBe('models/gemini-3.1-flash-live-preview');
-      expect(socket.sent[0].setup.responseModalities).toEqual(['AUDIO']);
+      expect(socket.sent[0].setup.generationConfig.responseModalities).toEqual(['AUDIO']);
       socket.emit({ serverContent: { inputTranscription: { text: 'AI will replace most creative jobs within five years.' } } });
       socket.emit({ serverContent: { outputTranscription: { text: 'That claim needs evidence.' }, turnComplete: true } });
       await flushPromises();

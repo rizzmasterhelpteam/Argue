@@ -628,14 +628,16 @@ export function App() {
           socket.send(JSON.stringify({
             setup: {
               model: `models/${token.model}`,
-              responseModalities: ['AUDIO'],
+              generationConfig: {
+                responseModalities: ['AUDIO'],
+                speechConfig: {
+                  voiceConfig: { prebuiltVoiceConfig: { voiceName: token.voice || 'Kore' } },
+                },
+                thinkingConfig: { thinkingLevel: 'low' },
+              },
               inputAudioTranscription: {},
               outputAudioTranscription: {},
               systemInstruction: { parts: [{ text: liveSystemInstruction(mode) }] },
-              speechConfig: {
-                voiceConfig: { prebuiltVoiceConfig: { voiceName: token.voice || 'Kore' } },
-              },
-              thinkingConfig: { thinkingLevel: 'low' },
               realtimeInputConfig: {
                 automaticActivityDetection: {
                   disabled: false,

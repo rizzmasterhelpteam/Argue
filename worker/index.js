@@ -36,6 +36,14 @@ function requireApiKey(env) {
   return env.GROQ_API_KEY;
 }
 
+function getGeminiApiKey(env) {
+  for (const name of ['GEMINI_API_KEY', 'GOOGLE_API_KEY']) {
+    const value = typeof env[name] === 'string' ? env[name].trim() : '';
+    if (value) return value;
+  }
+  return '';
+}
+
 function requestRateLimitKey(request) {
   return request.headers.get('cf-connecting-ip')
     || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
@@ -74,7 +82,8 @@ function getLiveVoice(env) {
 }
 
 async function handleLiveToken(request, env) {
-  if (!env.GEMINI_API_KEY) {
+  const apiKey = getGeminiApiKey(env);
+  if (!apiKey) {
     throw new ApiError('Gemini Live is not configured yet.', 503);
   }
 
@@ -93,29 +102,26 @@ async function handleLiveToken(request, env) {
   const tokenResponse = await fetch(GEMINI_AUTH_TOKEN_URL, {
     method: 'POST',
     headers: {
-      'x-goog-api-key': env.GEMINI_API_KEY,
+      'x-goog-api-key': apiKey,
       'content-type': 'application/json',
     },
     body: JSON.stringify({
       uses: 1,
       expireTime: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
       newSessionExpireTime: new Date(Date.now() + 60 * 1000).toISOString(),
-      liveConnectConstraints: {
-        model: `models/${model}`,
-        config: {
-          responseModalities: ['AUDIO'],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: voice },
-            },
-          },
-        },
-      },
     }),
   });
 
   if (!tokenResponse.ok) {
-    console.error('Gemini Live token provisioning failed', tokenResponse.status);
+    const errorData = await tokenResponse.json().catch(() => null);
+    const upstreamStatus = errorData?.error?.status || '';
+    console.error('Gemini Live token provisioning failed', tokenResponse.status, upstreamStatus);
+    if (tokenResponse.status === 401 || tokenResponse.status === 403) {
+      throw new ApiError('Gemini Live rejected the API key. Check GEMINI_API_KEY or GOOGLE_API_KEY in the active deployment environment.', 502);
+    }
+    if (tokenResponse.status === 400) {
+      throw new ApiError('Gemini Live rejected the session request. Check that the Live API is enabled for this key and the model is available.', 502);
+    }
     throw new ApiError('Gemini Live could not start right now.', tokenResponse.status === 429 ? 429 : 502);
   }
 
@@ -224,9 +230,9 @@ async function handleApi(request, env, url) {
   if (url.pathname === '/api/health' && request.method === 'GET') {
     return json({
       status: 'ok',
-      configured: Boolean(env.GROQ_API_KEY || env.GEMINI_API_KEY),
+      configured: Boolean(env.GROQ_API_KEY || getGeminiApiKey(env)),
       textConfigured: Boolean(env.GROQ_API_KEY),
-      liveConfigured: Boolean(env.GEMINI_API_KEY),
+      liveConfigured: Boolean(getGeminiApiKey(env)),
       reasoningModel: env.GROQ_REASONING_MODEL || DEFAULT_REASONING_MODEL,
       liveModel: getLiveModel(env),
       liveVoice: getLiveVoice(env),

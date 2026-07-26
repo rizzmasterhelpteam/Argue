@@ -34,4 +34,4 @@ Voice mode requests a short-lived Gemini Live token from `/api/live-token`, then
 
 ### Environment variables
 
-Copy `.env.example` to `.env` for local server deployments. Set `GEMINI_API_KEY` and optionally `GEMINI_LIVE_MODEL` / `GEMINI_LIVE_VOICE` for voice mode. Set `GROQ_API_KEY` and `GROQ_REASONING_MODEL` for Text mode.
+Copy `.env.example` to `.env` for local server deployments. Set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) and optionally `GEMINI_LIVE_MODEL` / `GEMINI_LIVE_VOICE` for voice mode. Set `GROQ_API_KEY` and `GROQ_REASONING_MODEL` for Text mode.
