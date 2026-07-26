@@ -23,22 +23,29 @@ The final capture shows the status panel fully above the bottom navigation on th
 
 ## Findings
 
-No blocking visual, interaction, accessibility-tree, or browser-console defects remain in the verified frontend scope.
+- [P1] Rendered visual comparison is blocked. The in-app browser was unavailable, so no fresh implementation screenshot or browser console/accessibility evidence could be captured for the new reference.
+  Fix: keep the local preview available and rerun the desktop comparison when browser control is available.
+
+## Current iteration
+
+- Source visual truth: user-provided desktop reference image in the current request, 1672 × 940 pixels.
+- Intended implementation viewport: desktop browser surface matching the reference composition; density normalization not performed because the implementation screenshot could not be captured.
+- Implemented: full-width left rail with Argue AI lockup, active Argue card, History/Profile navigation, Daily Streak and Total Arguments cards, Go Pro card, centered conversation/mode controls, generated dotted waveform background asset, enlarged status panel, and three benefit cards.
+- Code validation: 10 automated tests passed; production build passed; local preview endpoint was not listening and could not be started by the available shell policy.
 
 ## Comparison history
 
-1. Initial desktop pass: the desktop shell was added around the existing responsive app, including the left rail and centered workspace.
-2. Follow-up pass: the status panel was being squeezed behind the bottom navigation on shorter laptop-height viewports. Fix: made the desktop orb non-shrinking, reduced its viewport-aware size, tightened status-panel spacing, and corrected the waveform/gear order.
-3. Final pass: reloaded the local preview, captured the updated screenshot, verified Argue/Brainstorm and Voice/Text switches, checked History navigation, confirmed the desktop sidebar locator, and found no browser console errors.
+1. Initial desktop pass: the desktop shell was added around the existing responsive app.
+2. Follow-up pass: the shorter desktop layout was tightened so the orb and status panel stayed above the bottom navigation.
+3. Current pass: implemented the supplied desktop reference structure and decorative waveform asset; visual/browser verification is blocked by unavailable browser control.
 
 ## Implementation checklist
 
-- [x] Desktop shell matches the supplied visual direction.
-- [x] Existing mobile layout remains the default below the desktop breakpoint.
-- [x] Voice state panel is fully visible above bottom navigation.
-- [x] Primary mode, input-mode, history, and navigation interactions verified locally.
-- [x] Browser console error check passes.
+- [x] Desktop reference structure implemented.
+- [x] Existing mobile layout remains gated below the desktop breakpoint.
+- [x] Sidebar stats, Go Pro card, hero controls, status panel, and benefit cards added.
 - [x] Automated regression suite passes (10 tests).
 - [x] Production build passes.
+- [ ] Browser-rendered screenshot comparison and console/accessibility check.
 
-final result: passed
+final result: blocked

@@ -1,13 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
+  CaretLeft,
   CaretRight,
+  ChartLineUp,
   ChatCircleDots,
   Check,
   Clock,
   Copy,
+  Crown,
   DotsThree,
+  Flame,
   GearSix,
+  Hexagon,
   Lightbulb,
   List,
   MagnifyingGlass,
@@ -18,6 +23,8 @@ import {
   SlidersHorizontal,
   Sparkle,
   SpeakerHigh,
+  ShieldCheck,
+  Target,
   TextT,
   UserCircle,
   Waveform,
@@ -665,7 +672,7 @@ export function App() {
     <>
       {showSplash && <SplashScreen />}
       <main aria-hidden={showSplash ? 'true' : undefined} className={settings.reducedMotion ? 'app-stage reduced-motion' : 'app-stage'}>
-      <section className="device-frame" aria-label="Argue AI mobile prototype">
+      <section className="device-frame" aria-label="Argue AI responsive workspace">
         <div className="device-screen">
           <div className="status-bar" aria-hidden="true">
             <span>9:41</span>
@@ -814,6 +821,7 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, startV
 
       {inputMode === 'voice' && (
         <section className={isBusy ? 'voice-zone busy' : 'voice-zone'} aria-label="Voice conversation control">
+          <div className="desktop-waveform-backdrop" aria-hidden="true" />
           <button className="voice-orbit" type="button" onClick={startVoiceSession} aria-label={isBusy ? 'Stop voice session' : 'Start voice session'}>
             <span className="voice-core">
               <Waveform className="core-waveform" size={45} weight="bold" />
@@ -827,6 +835,11 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, startV
             <StateItem icon={<Waveform size={24} weight="bold" />} label="Speaking" active={activeState === 'speaking'} />
           </div>
           <p className="voice-caption">{voiceStatusCopy[voiceState]}</p>
+          <div className="desktop-feature-grid" aria-label="Argue AI benefits">
+            <FeatureCard icon={<ShieldCheck size={22} weight="fill" />} title="Defend your point" copy="Build stronger arguments" />
+            <FeatureCard icon={<Target size={22} weight="fill" />} title="Win the discussion" copy="Counter with confidence" />
+            <FeatureCard icon={<ChartLineUp size={22} weight="fill" />} title="Track your progress" copy="Improve over time" />
+          </div>
           <span className="sr-only" role="status">Voice status: {voiceState}</span>
         </section>
       )}
@@ -872,6 +885,15 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, startV
         </form>
       )}
     </div>
+  );
+}
+
+function FeatureCard({ icon, title, copy }) {
+  return (
+    <article className="desktop-feature-card">
+      <span className="desktop-feature-icon" aria-hidden="true">{icon}</span>
+      <div><strong>{title}</strong><span>{copy}</span></div>
+    </article>
   );
 }
 
@@ -939,16 +961,34 @@ function DesktopSidebar({ activeNav, onNavigate }) {
 
   return (
     <aside className="desktop-sidebar" aria-label="Desktop sidebar">
-      <div className="desktop-menu-button" aria-hidden="true"><List size={25} /></div>
-      <div className="desktop-sidebar-rule" aria-hidden="true" />
+      <div className="desktop-sidebar-header">
+        <div className="desktop-sidebar-brand" aria-label="Argue AI"><span>Argue</span><b>AI</b></div>
+        <button className="desktop-collapse-button" type="button" aria-label="Collapse sidebar"><CaretLeft size={19} weight="bold" /></button>
+      </div>
       <nav className="desktop-sidebar-nav" aria-label="Desktop navigation">
         {items.map(({ label, icon: Icon }) => (
           <button key={label} type="button" className={activeNav === label ? 'desktop-sidebar-item active' : 'desktop-sidebar-item'} aria-label={`Desktop ${label}`} aria-current={activeNav === label ? 'page' : undefined} onClick={() => onNavigate(label)}>
             <Icon size={23} weight={activeNav === label ? 'fill' : 'regular'} />
-            <span aria-hidden="true">{label}</span>
+            <span>{label}</span>
           </button>
         ))}
       </nav>
+      <div className="desktop-sidebar-footer">
+        <div className="desktop-stat-card">
+          <span className="desktop-stat-icon"><Flame size={20} weight="fill" /></span>
+          <div><span>Daily Streak</span><strong>7 days</strong></div>
+        </div>
+        <div className="desktop-stat-card">
+          <span className="desktop-stat-icon"><Hexagon size={20} weight="regular" /></span>
+          <div><span>Total Arguments</span><strong>24</strong></div>
+        </div>
+        <div className="desktop-pro-card">
+          <Crown className="desktop-pro-crown" size={22} weight="fill" />
+          <h3>Go Pro</h3>
+          <p>Unlock unlimited arguments, advanced insights, and more.</p>
+          <button type="button" onClick={() => onNavigate('Profile')}>Upgrade</button>
+        </div>
+      </div>
     </aside>
   );
 }
