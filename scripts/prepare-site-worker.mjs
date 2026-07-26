@@ -3,7 +3,12 @@ import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 await mkdir('dist/server', { recursive: true });
 await mkdir('dist/.openai', { recursive: true });
 await copyFile('dist/argue_ai/index.js', 'dist/server/index.js');
-await copyFile('.openai/hosting.json', 'dist/.openai/hosting.json');
+try {
+  await copyFile('.openai/hosting.json', 'dist/.openai/hosting.json');
+} catch (error) {
+  if (error.code !== 'ENOENT') throw error;
+  await rm('dist/.openai', { recursive: true, force: true });
+}
 await rm('dist/argue_ai', { recursive: true, force: true });
 await rm('dist/assets', { recursive: true, force: true });
 await rm('dist/index.html', { force: true });

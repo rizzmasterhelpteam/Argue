@@ -232,3 +232,105 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .voice-caption { margin-top: 8px; font-size: 10px; }
   .bottom-nav { height: 72px; flex-basis: 72px; }
 }
+
+/* Desktop workspace: the mobile device shell stays unchanged below 900px. */
+.desktop-layout { display: contents; }
+.desktop-main { display: contents; }
+.desktop-sidebar { display: none; }
+.desktop-settings-action { display: none; }
+.desktop-subtitle { display: none; }
+
+@media (min-width: 900px) {
+  .app-stage {
+    padding: 26px 32px;
+    background: radial-gradient(circle at 50% 80%, rgba(255, 91, 0, .15), transparent 24%), radial-gradient(circle at 50% 42%, #16100c 0, #060606 38%, #020202 72%);
+  }
+
+  .device-frame {
+    width: min(1280px, calc(100vw - 64px));
+    height: min(860px, calc(100dvh - 52px));
+    border-radius: 28px;
+    padding: 7px;
+  }
+
+  .device-screen { border-radius: 21px; }
+  .status-bar { display: none; }
+  .desktop-layout { display: flex; flex: 1; min-height: 0; }
+  .desktop-main { min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; }
+  .desktop-sidebar {
+    width: 90px;
+    flex: 0 0 90px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    border-right: 1px solid #202124;
+    background: rgba(5, 6, 7, .78);
+  }
+  .desktop-menu-button { width: 100%; height: 88px; display: grid; place-items: center; color: #c5c6c8; }
+  .desktop-sidebar-rule { width: 100%; border-bottom: 1px solid #1e2021; }
+  .desktop-sidebar-nav { width: 100%; display: flex; flex-direction: column; gap: 8px; padding-top: 18px; }
+  .desktop-sidebar-item {
+    position: relative;
+    width: 100%;
+    height: 62px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    color: #8f9194;
+    background: transparent;
+    font-size: 10px;
+    transition: color .22s ease, background .22s ease, transform .22s ease;
+  }
+  .desktop-sidebar-item.active {
+    color: var(--orange);
+    background: linear-gradient(90deg, rgba(255, 101, 0, .13), rgba(255, 101, 0, .015));
+  }
+  .desktop-sidebar-item.active::after { content: ''; position: absolute; top: 0; right: 0; bottom: 0; width: 2px; background: var(--orange); box-shadow: 0 0 14px rgba(255, 101, 0, .68); }
+  .desktop-sidebar-item:hover { color: #f5f5f5; transform: translateX(2px); }
+
+  .home-screen { padding: 28px 42px 0; }
+  .top-header { min-height: 52px; justify-content: flex-start; }
+  .brand-lockup { font-size: 26px; }
+  .desktop-main .header-action { right: 54px; }
+  .desktop-settings-action { position: absolute; top: 0; right: 0; display: grid; }
+  .desktop-subtitle { display: block; margin: 8px 0 0; color: #7e8084; text-align: center; font-size: 14px; line-height: 1.3; }
+
+  .desktop-main .mode-switcher {
+    position: absolute;
+    top: 80px;
+    left: 42px;
+    width: 180px;
+    height: 34px;
+    margin-top: 0;
+    transform: scale(.82);
+    transform-origin: left top;
+    opacity: .78;
+  }
+  .desktop-main .mode-tab { gap: 5px; font-size: 10px; }
+  .desktop-main .mode-tab svg { width: 17px; height: 17px; }
+  .desktop-main .tagline { margin-top: 54px; font-size: 28px; line-height: 1.1; font-weight: 700; color: #f1f1f2; }
+  .desktop-main .input-mode-switcher { width: 300px; height: 42px; margin-top: 22px; }
+  .desktop-main .input-mode-tab { font-size: 14px; }
+  .home-screen.voice-mode .voice-zone { flex: 1 1 auto; justify-content: flex-start; min-height: 0; padding-top: 18px; }
+  .voice-orbit { width: clamp(210px, 29vh, 244px); height: clamp(210px, 29vh, 244px); flex: 0 0 auto; }
+  .voice-core { width: min(166px, 22vh); height: min(166px, 22vh); }
+  .voice-core strong { font-size: 32px; }
+  .state-row {
+    width: min(690px, 100%);
+    max-width: none;
+    min-height: 72px;
+    margin-top: 12px;
+    padding: 12px 24px;
+    border: 1px solid #202224;
+    border-radius: 22px;
+    background: rgba(10, 11, 12, .68);
+  }
+  .state-item { position: relative; gap: 4px; font-size: 12px; }
+  .state-item:not(:last-child)::after { content: ''; position: absolute; top: 17px; right: -26%; width: 52%; border-top: 2px dotted #36383b; }
+  .voice-caption { margin-top: 12px; font-size: 12px; }
+  .bottom-nav { height: 82px; flex-basis: 82px; padding: 8px 80px 14px; background: linear-gradient(180deg, #101112, #0b0c0d); }
+  .nav-item { font-size: 13px; }
+  .home-indicator { display: none; }
+}

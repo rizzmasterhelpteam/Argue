@@ -676,43 +676,48 @@ export function App() {
             </div>
           </div>
 
-          <div className="app-content">
-            {activeNav === 'Argue' && (
-              <HomeScreen
-                mode={mode}
-                setMode={setMode}
-                inputMode={inputMode}
-                setInputMode={setInputMode}
-                voiceState={voiceState}
-                startVoiceSession={startVoiceSession}
-                messages={messages}
-                messageLimit={settings.compactTranscript ? 2 : 4}
-                draft={draft}
-                setDraft={setDraft}
-                sendDraft={sendDraft}
-                copyMessage={copyMessage}
-                copiedId={copiedId}
-                playingMessageId={playingMessageId}
-                replayMessage={replayMessage}
-                openSettings={openSettings}
-              />
-            )}
-            {activeNav === 'History' && (
-              <HistoryScreen
-                conversations={historyItems}
-                onOpenConversation={openConversation}
-                onStartNew={startNewConversation}
-              />
-            )}
-            {activeNav === 'Profile' && (
-              <ProfileScreen
-                onOpenSettings={openSettings}
-                onAction={showNotice}
-              />
-            )}
-          </div>
+          <div className="desktop-layout">
+            <DesktopSidebar activeNav={activeNav} onNavigate={navigate} />
+            <div className="desktop-main">
+              <div className="app-content">
+                {activeNav === 'Argue' && (
+                  <HomeScreen
+                    mode={mode}
+                    setMode={setMode}
+                    inputMode={inputMode}
+                    setInputMode={setInputMode}
+                    voiceState={voiceState}
+                    startVoiceSession={startVoiceSession}
+                    messages={messages}
+                    messageLimit={settings.compactTranscript ? 2 : 4}
+                    draft={draft}
+                    setDraft={setDraft}
+                    sendDraft={sendDraft}
+                    copyMessage={copyMessage}
+                    copiedId={copiedId}
+                    playingMessageId={playingMessageId}
+                    replayMessage={replayMessage}
+                    openSettings={openSettings}
+                  />
+                )}
+                {activeNav === 'History' && (
+                  <HistoryScreen
+                    conversations={historyItems}
+                    onOpenConversation={openConversation}
+                    onStartNew={startNewConversation}
+                  />
+                )}
+                {activeNav === 'Profile' && (
+                  <ProfileScreen
+                    onOpenSettings={openSettings}
+                    onAction={showNotice}
+                  />
+                )}
+              </div>
 
-          <BottomNav activeNav={activeNav} onNavigate={navigate} />
+              <BottomNav activeNav={activeNav} onNavigate={navigate} />
+            </div>
+          </div>
           <div className="home-indicator" aria-hidden="true" />
         </div>
       </section>
@@ -777,6 +782,9 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, startV
         <button className="icon-button header-action" type="button" aria-label="Open voice settings" onClick={() => openSettings('voice')}>
           <Waveform size={21} weight="bold" />
         </button>
+        <button className="icon-button desktop-settings-action" type="button" aria-label="Open app preferences" onClick={() => openSettings('app')}>
+          <GearSix size={21} weight="regular" />
+        </button>
       </header>
 
       <div className="mode-switcher" role="tablist" aria-label="Conversation mode">
@@ -791,6 +799,7 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, startV
       </div>
 
       <p className="tagline">{mode === 'Argue' ? 'Make the case.' : 'Build the idea.'}</p>
+      <p className="desktop-subtitle">Argue your point. Defend your ideas. Win the discussion.</p>
 
       <div className="input-mode-switcher" role="tablist" aria-label="Input mode">
         <button className={inputMode === 'voice' ? 'input-mode-tab active' : 'input-mode-tab'} disabled={isBusy} onClick={() => setInputMode('voice')} role="tab" aria-selected={inputMode === 'voice'} aria-label="Voice input" type="button">
@@ -918,6 +927,29 @@ function BottomNav({ activeNav, onNavigate }) {
         </button>
       ))}
     </nav>
+  );
+}
+
+function DesktopSidebar({ activeNav, onNavigate }) {
+  const items = [
+    { label: 'Argue', icon: ChatCircleDots },
+    { label: 'History', icon: Clock },
+    { label: 'Profile', icon: UserCircle },
+  ];
+
+  return (
+    <aside className="desktop-sidebar" aria-label="Desktop sidebar">
+      <div className="desktop-menu-button" aria-hidden="true"><List size={25} /></div>
+      <div className="desktop-sidebar-rule" aria-hidden="true" />
+      <nav className="desktop-sidebar-nav" aria-label="Desktop navigation">
+        {items.map(({ label, icon: Icon }) => (
+          <button key={label} type="button" className={activeNav === label ? 'desktop-sidebar-item active' : 'desktop-sidebar-item'} aria-label={`Desktop ${label}`} aria-current={activeNav === label ? 'page' : undefined} onClick={() => onNavigate(label)}>
+            <Icon size={23} weight={activeNav === label ? 'fill' : 'regular'} />
+            <span aria-hidden="true">{label}</span>
+          </button>
+        ))}
+      </nav>
+    </aside>
   );
 }
 
