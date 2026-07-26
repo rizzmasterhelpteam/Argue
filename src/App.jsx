@@ -32,10 +32,46 @@ import {
 } from '@phosphor-icons/react';
 
 const SETTINGS_KEY = 'argue-ai-settings';
+const SETTINGS_VERSION = 2;
 const VOICE_PLAYBACK_RATE = 1.5;
 const LIVE_INPUT_SAMPLE_RATE = 16000;
 const LIVE_OUTPUT_SAMPLE_RATE = 24000;
 const LIVE_API_VERSION = 'v1beta';
+const LIVE_SESSION_MAX_MS = 60 * 1000;
+const LIVE_SILENCE_TIMEOUT_MS = 15 * 1000;
+const LIVE_SPEECH_RMS_THRESHOLD = 0.02;
+const LIVE_TOKEN_TIMEOUT_MS = 8 * 1000;
+const LIVE_SOCKET_TIMEOUT_MS = 8 * 1000;
+const LIVE_SETUP_TIMEOUT_MS = 8 * 1000;
+const LIVE_FIRST_CHUNK_TIMEOUT_MS = 4 * 1000;
+const LIVE_NO_AUDIO_TIMEOUT_MS = 3 * 1000;
+const LIVE_RESPONSE_TIMEOUT_MS = 15 * 1000;
+const VOICE_PHASES = [
+  'idle',
+  'requesting-permission',
+  'requesting-token',
+  'opening-socket',
+  'sending-setup',
+  'waiting-for-setup',
+  'starting-microphone',
+  'listening',
+  'speech-detected',
+  'waiting-for-response',
+  'receiving-audio',
+  'playing',
+  'error',
+  'stopped',
+];
+
+function voiceUiStateForPhase(phase) {
+  if (phase === 'error') return 'error';
+  if (phase === 'playing') return 'speaking';
+  if (phase === 'receiving-audio') return 'generating';
+  if (phase === 'speech-detected') return 'listening';
+  if (phase === 'listening') return 'listening';
+  if (phase === 'idle' || phase === 'stopped') return 'idle';
+  return 'thinking';
+}
 
 const defaultSettings = {
   autoPlayVoice: true,
@@ -135,10 +171,18 @@ async function requestLiveToken(mode, signal) {
     body: JSON.stringify({ mode }),
     signal,
   });
+  voiceDebug('token response', {
+    status: response.status,
+    contentType: response.headers?.get?.('content-type') || 'unknown',
+  });
 
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
-    throw new Error(data.error || 'Gemini Live is unavailable right now.');
+    const error = new Error(data.error || 'Gemini Live is unavailable right now.');
+    error.code = data.code;
+    error.stage = data.stage;
+    error.requestId = data.requestId;
+    throw error;
   }
 
   const data = await response.json().catch(() => null);
@@ -188,6 +232,55 @@ function downsampleToPcm16(input, inputSampleRate) {
   return pcm;
 }
 
+async function createAudioWorkletCapture(context, stream, onSamples) {
+  const AudioWorkletNodeClass = window.AudioWorkletNode;
+  const audioWorklet = context.audioWorklet;
+  const urlApi = window.URL;
+  if (
+    typeof AudioWorkletNodeClass !== 'function'
+    || !audioWorklet?.addModule
+    || typeof Blob !== 'function'
+    || typeof urlApi?.createObjectURL !== 'function'
+  ) return null;
+
+  const moduleUrl = urlApi.createObjectURL(new Blob([`
+    class ArgueMicCapture extends AudioWorkletProcessor {
+      process(inputs, outputs) {
+        const input = inputs[0]?.[0];
+        if (input) this.port.postMessage(new Float32Array(input));
+        for (const channel of outputs[0] || []) channel.fill(0);
+        return true;
+      }
+    }
+    registerProcessor('argue-mic-capture', ArgueMicCapture);
+  `], { type: 'application/javascript' }));
+
+  try {
+    await audioWorklet.addModule(moduleUrl);
+  } catch {
+    return null;
+  } finally {
+    urlApi.revokeObjectURL?.(moduleUrl);
+  }
+
+  const source = context.createMediaStreamSource(stream);
+  const processor = new AudioWorkletNodeClass(context, 'argue-mic-capture', {
+    numberOfInputs: 1,
+    numberOfOutputs: 1,
+    channelCount: 1,
+  });
+  const silence = context.createGain();
+  silence.gain.value = 0;
+  processor.port.onmessage = (event) => {
+    const samples = event.data instanceof Float32Array ? event.data : new Float32Array(event.data);
+    onSamples(samples);
+  };
+  source.connect(processor);
+  processor.connect(silence);
+  silence.connect(context.destination);
+  return { source, processor, silence };
+}
+
 function pcm16ToFloat32(bytes) {
   const sampleCount = Math.floor(bytes.byteLength / 2);
   const view = new DataView(bytes.buffer, bytes.byteOffset, sampleCount * 2);
@@ -208,8 +301,27 @@ function getPlaybackErrorMessage(error) {
   return error?.message || 'Voice playback failed. Please try again.';
 }
 
+function getVoiceErrorMessage(error, stage) {
+  if (stage === 'requesting-permission' && error?.name === 'NotAllowedError') return 'Microphone permission was denied. Allow microphone access and try again.';
+  if (stage === 'requesting-permission' && error?.name === 'NotFoundError') return 'No microphone was found on this device.';
+  if (stage === 'requesting-permission' && error?.name === 'NotReadableError') return 'The microphone is busy in another app.';
+  if (stage === 'requesting-permission' && error?.name === 'SecurityError') return 'Microphone access requires a secure HTTPS connection.';
+  return getPlaybackErrorMessage(error);
+}
+
 function voiceDebug(stage, details) {
-  if (import.meta.env?.DEV) console.debug(`[Argue AI voice] ${stage}`, details || '');
+  const productionDebug = typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('voiceDebug') === '1';
+  if (!import.meta.env?.DEV && !productionDebug) return;
+  const safeDetails = details && typeof details === 'object' ? { ...details } : details || '';
+  if (safeDetails && typeof safeDetails === 'object') {
+    delete safeDetails.token;
+    delete safeDetails.accessToken;
+    delete safeDetails.audio;
+    delete safeDetails.base64Audio;
+    delete safeDetails.transcript;
+  }
+  console.debug(`[Argue AI voice] ${stage}`, safeDetails);
 }
 
 let fallbackId = 0;
@@ -243,9 +355,12 @@ function liveSystemInstruction(mode) {
 function loadSettings() {
   try {
     const saved = window.localStorage.getItem(SETTINGS_KEY);
-    return saved ? { ...defaultSettings, ...JSON.parse(saved), speakingSpeed: String(VOICE_PLAYBACK_RATE) } : defaultSettings;
+    if (!saved) return { ...defaultSettings, settingsVersion: SETTINGS_VERSION };
+    const parsed = JSON.parse(saved);
+    const selectedVoice = ['Nova', 'Ember'].includes(parsed.selectedVoice) ? parsed.selectedVoice : defaultSettings.selectedVoice;
+    return { ...defaultSettings, ...parsed, selectedVoice, speakingSpeed: String(VOICE_PLAYBACK_RATE), settingsVersion: SETTINGS_VERSION };
   } catch {
-    return defaultSettings;
+    return { ...defaultSettings, settingsVersion: SETTINGS_VERSION };
   }
 }
 
@@ -276,7 +391,11 @@ export function App() {
   const [mode, setMode] = useState('Argue');
   const [inputMode, setInputMode] = useState('voice');
   const [activeNav, setActiveNav] = useState('Argue');
-  const [voiceState, setVoiceState] = useState('idle');
+  const [voicePhase, setVoicePhase] = useState('idle');
+  const voiceState = voiceUiStateForPhase(voicePhase);
+  const [lastVoiceError, setLastVoiceError] = useState('');
+  const [hasPendingAudio, setHasPendingAudio] = useState(false);
+  const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
   const [messages, setMessages] = useState(initialMessages);
   const [draft, setDraft] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -286,6 +405,7 @@ export function App() {
   const [playingMessageId, setPlayingMessageId] = useState(null);
   const [notice, setNotice] = useState('');
   const liveSocket = useRef(null);
+  const stopLiveSessionRef = useRef(null);
   const liveStream = useRef(null);
   const liveSessionId = useRef(0);
   const liveTokenAbort = useRef(null);
@@ -293,6 +413,12 @@ export function App() {
   const liveMicSource = useRef(null);
   const liveMicProcessor = useRef(null);
   const liveMicSilence = useRef(null);
+  const liveMicInactivityTimer = useRef(null);
+  const liveSessionTimer = useRef(null);
+  const liveStartPromise = useRef(null);
+  const liveTimeouts = useRef(new Map());
+  const liveAudioMetrics = useRef({ chunksSent: 0, bytesSent: 0, chunksReceived: 0, bytesReceived: 0, rms: 0, speechDetected: false });
+  const livePendingAudio = useRef([]);
   const liveOutputContext = useRef(null);
   const liveOutputSources = useRef(new Set());
   const liveOutputNextTime = useRef(0);
@@ -325,22 +451,51 @@ export function App() {
     if (settings.hapticsEnabled && navigator.vibrate) navigator.vibrate(10);
   }, [settings.hapticsEnabled]);
 
-  const showVoiceError = useCallback((error) => {
-    setVoiceState('error');
-    showNotice(getPlaybackErrorMessage(error));
+  const clearLiveTimeouts = useCallback(() => {
+    for (const timer of liveTimeouts.current.values()) window.clearTimeout(timer);
+    liveTimeouts.current.clear();
+  }, []);
+
+  const scheduleLiveTimeout = useCallback((name, delay, sessionId, callback) => {
+    const existing = liveTimeouts.current.get(name);
+    if (existing) window.clearTimeout(existing);
+    const timer = window.setTimeout(() => {
+      liveTimeouts.current.delete(name);
+      if (liveSessionId.current === sessionId) callback();
+    }, delay);
+    liveTimeouts.current.set(name, timer);
+  }, []);
+
+  const clearLiveTimeout = useCallback((name) => {
+    const timer = liveTimeouts.current.get(name);
+    if (timer) window.clearTimeout(timer);
+    liveTimeouts.current.delete(name);
+  }, []);
+
+  const showVoiceError = useCallback((error, stage = voicePhase) => {
+    const message = getVoiceErrorMessage(error, stage);
+    setLastVoiceError(message);
+    setVoicePhase('error');
+    voiceDebug('error', { phase: stage, message, name: error?.name || 'Error' });
+    showNotice(message);
     if (voiceStatusTimer.current) window.clearTimeout(voiceStatusTimer.current);
     voiceStatusTimer.current = window.setTimeout(() => {
       voiceStatusTimer.current = null;
-      setVoiceState('idle');
+      setVoicePhase('idle');
     }, 2200);
-  }, [showNotice]);
+  }, [showNotice, voicePhase]);
+
+  useEffect(() => {
+    if (!VOICE_PHASES.includes(voicePhase)) return;
+    voiceDebug('phase', { phase: voicePhase, sessionId: liveSessionId.current });
+  }, [voicePhase]);
 
   const stopSpeechPlayback = useCallback(() => {
     window.speechSynthesis?.cancel?.();
     speechUtterance.current = null;
   }, []);
 
-  const stopLiveAudio = useCallback(() => {
+  const clearLiveAudioQueue = useCallback(() => {
     for (const source of liveOutputSources.current) {
       source.onended = null;
       try {
@@ -353,18 +508,27 @@ export function App() {
     liveOutputSources.current.clear();
     liveOutputNextTime.current = 0;
     liveOutputPendingTurn.current = false;
+  }, []);
+
+  const closeLiveOutputContext = useCallback(() => {
+    clearLiveAudioQueue();
     const context = liveOutputContext.current;
     liveOutputContext.current = null;
     if (context && context.state !== 'closed') {
       const closing = context.close?.();
       closing?.catch?.(() => {});
     }
-  }, []);
+  }, [clearLiveAudioQueue]);
 
   const stopLiveMicrophone = useCallback(() => {
+    if (liveMicInactivityTimer.current) {
+      window.clearTimeout(liveMicInactivityTimer.current);
+      liveMicInactivityTimer.current = null;
+    }
     const processor = liveMicProcessor.current;
     if (processor) {
       processor.onaudioprocess = null;
+      processor.port?.close?.();
       processor.disconnect?.();
     }
     liveMicSource.current?.disconnect?.();
@@ -408,46 +572,97 @@ export function App() {
     liveAssistantMessageId.current = null;
   }, [upsertLiveMessage]);
 
-  const queueLiveAudio = useCallback((base64Audio, mimeType, sessionId) => {
-    if (liveSessionId.current !== sessionId || !settings.autoPlayVoice) return;
+  const storeLiveAudio = useCallback((base64Audio, mimeType) => {
+    const currentSize = livePendingAudio.current.reduce((total, item) => total + item.base64Audio.length, 0);
+    if (currentSize + base64Audio.length > 8 * 1024 * 1024) return;
+    livePendingAudio.current.push({ base64Audio, mimeType });
+    setHasPendingAudio(true);
+  }, []);
+
+  const queueLiveAudio = useCallback(async (base64Audio, mimeType, sessionId, forcePlay = false, fromPending = false) => {
+    if (liveSessionId.current !== sessionId || !base64Audio) return;
+    if (!fromPending) {
+      const estimatedBytes = Math.max(0, Math.floor(base64Audio.length * 0.75));
+      liveAudioMetrics.current.chunksReceived += 1;
+      liveAudioMetrics.current.bytesReceived += estimatedBytes;
+      voiceDebug('audio received', { bytes: estimatedBytes });
+    }
+    if (!forcePlay && !settings.autoPlayVoice) {
+      storeLiveAudio(base64Audio, mimeType);
+      voiceDebug('audio queued', { autoplay: false });
+      return;
+    }
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (typeof AudioContextClass !== 'function') throw new Error('Live audio is not supported in this browser.');
+    if (typeof AudioContextClass !== 'function') {
+      storeLiveAudio(base64Audio, mimeType);
+      setAudioPlaybackBlocked(true);
+      return;
+    }
 
     let context = liveOutputContext.current;
-    if (!context) {
-      context = new AudioContextClass();
-      liveOutputContext.current = context;
+    if (!context || context.state === 'closed') {
+      storeLiveAudio(base64Audio, mimeType);
+      setAudioPlaybackBlocked(true);
+      return;
     }
-    context.resume?.().catch?.(() => {});
+    try {
+      if (context.state === 'suspended') await context.resume?.();
+    } catch {
+      // The browser may require a user gesture to resume output audio.
+    }
+    if (liveSessionId.current !== sessionId) return;
+    if (context.state !== 'running') {
+      storeLiveAudio(base64Audio, mimeType);
+      setAudioPlaybackBlocked(true);
+      voiceDebug('output context suspended', { state: context.state });
+      return;
+    }
 
-    const bytes = base64ToBytes(base64Audio);
-    const samples = pcm16ToFloat32(bytes);
-    if (!samples.length) return;
-    const audioBuffer = context.createBuffer(1, samples.length, parseSampleRate(mimeType));
-    if (typeof audioBuffer.copyToChannel === 'function') audioBuffer.copyToChannel(samples, 0);
-    else audioBuffer.getChannelData(0).set(samples);
-    const source = context.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(context.destination);
-    const now = Number.isFinite(context.currentTime) ? context.currentTime : 0;
-    const startAt = Math.max(now + 0.02, liveOutputNextTime.current || 0);
-    liveOutputNextTime.current = startAt + audioBuffer.duration;
-    liveOutputSources.current.add(source);
-    source.onended = () => {
-      liveOutputSources.current.delete(source);
-      source.disconnect?.();
-      if (liveOutputPendingTurn.current && liveOutputSources.current.size === 0) {
-        liveOutputPendingTurn.current = false;
-        setVoiceState('listening');
-      }
-    };
-    source.start(startAt);
-    voiceDebug('audio queued');
-    setVoiceState('speaking');
-  }, [settings.autoPlayVoice]);
+    try {
+      const bytes = base64ToBytes(base64Audio);
+      const samples = pcm16ToFloat32(bytes);
+      if (!samples.length) return;
+      const audioBuffer = context.createBuffer(1, samples.length, parseSampleRate(mimeType));
+      if (typeof audioBuffer.copyToChannel === 'function') audioBuffer.copyToChannel(samples, 0);
+      else audioBuffer.getChannelData(0).set(samples);
+      const source = context.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(context.destination);
+      const now = Number.isFinite(context.currentTime) ? context.currentTime : 0;
+      const startAt = Math.max(now + 0.02, liveOutputNextTime.current || 0);
+      liveOutputNextTime.current = startAt + audioBuffer.duration;
+      liveOutputSources.current.add(source);
+      source.onended = () => {
+        liveOutputSources.current.delete(source);
+        source.disconnect?.();
+        if (liveOutputPendingTurn.current && liveOutputSources.current.size === 0) {
+          liveOutputPendingTurn.current = false;
+          setVoicePhase('listening');
+        }
+      };
+      source.start(startAt);
+      setAudioPlaybackBlocked(false);
+      voiceDebug('audio queued', { bytes: bytes.byteLength, outputState: context.state });
+      setVoicePhase('playing');
+    } catch (error) {
+      storeLiveAudio(base64Audio, mimeType);
+      setAudioPlaybackBlocked(true);
+      voiceDebug('audio playback failed', { name: error?.name || 'Error' });
+    }
+  }, [settings.autoPlayVoice, storeLiveAudio]);
+
+  const playPendingResponse = useCallback(async () => {
+    const pending = livePendingAudio.current.splice(0);
+    if (!pending.length) return;
+    setHasPendingAudio(false);
+    setAudioPlaybackBlocked(false);
+    const sessionId = liveSessionId.current;
+    for (const item of pending) await queueLiveAudio(item.base64Audio, item.mimeType, sessionId, true, true);
+  }, [queueLiveAudio]);
 
   const handleLiveMessage = useCallback((event, sessionId) => {
     if (liveSessionId.current !== sessionId) return;
+    clearLiveTimeout('setup');
 
     let payload;
     try {
@@ -457,102 +672,224 @@ export function App() {
       return;
     }
 
+    voiceDebug('server message', { type: Object.keys(payload || {})[0] || 'unknown' });
     const serverContent = payload?.serverContent;
-    if (!serverContent) return;
+    if (!serverContent) {
+      if (payload?.goAway) voiceDebug('goAway', { timeLeft: payload.goAway.timeLeft || '' });
+      if (payload?.sessionResumptionUpdate) voiceDebug('sessionResumptionUpdate');
+      if (payload?.toolCall) voiceDebug('toolCall');
+      if (payload?.toolCallCancellation) voiceDebug('toolCallCancellation');
+      if (payload?.usageMetadata) voiceDebug('usageMetadata', { totalTokenCount: payload.usageMetadata.totalTokenCount });
+      return;
+    }
     voiceDebug('response received');
 
     if (serverContent.interrupted) {
-      stopLiveAudio();
+      clearLiveAudioQueue();
       finalizeLiveTurn();
-      setVoiceState('listening');
+      setVoicePhase('listening');
       return;
     }
 
     const inputText = serverContent.inputTranscription?.text;
     if (typeof inputText === 'string' && inputText.trim()) {
+      clearLiveTimeout('response');
       liveInputTranscript.current += `${inputText} `;
       upsertLiveMessage('user', liveInputTranscript.current);
+      setVoicePhase('speech-detected');
+      scheduleLiveTimeout('response', LIVE_RESPONSE_TIMEOUT_MS, sessionId, () => {
+        stopLiveSessionRef.current?.(false);
+        showVoiceError(new Error('Gemini did not respond after your speech.'), 'waiting-for-response');
+      });
     }
 
     const outputText = serverContent.outputTranscription?.text;
     if (typeof outputText === 'string' && outputText.trim()) {
+      clearLiveTimeout('response');
       liveOutputTranscript.current += `${outputText} `;
       upsertLiveMessage('assistant', liveOutputTranscript.current);
-      setVoiceState((current) => current === 'speaking' ? current : 'generating');
+      setVoicePhase('receiving-audio');
     }
 
     for (const part of serverContent.modelTurn?.parts || []) {
       const inlineData = part?.inlineData || part?.inline_data;
-      if (inlineData?.data) queueLiveAudio(inlineData.data, inlineData.mimeType || inlineData.mime_type, sessionId);
+      if (inlineData?.data) {
+        clearLiveTimeout('response');
+        void queueLiveAudio(inlineData.data, inlineData.mimeType || inlineData.mime_type, sessionId);
+        setVoicePhase('receiving-audio');
+      }
       if (!outputText && typeof part?.text === 'string' && part.text.trim()) {
         liveOutputTranscript.current += `${part.text} `;
         upsertLiveMessage('assistant', liveOutputTranscript.current);
-        setVoiceState('generating');
+        setVoicePhase('receiving-audio');
       }
     }
 
-    if (serverContent.turnComplete) {
+    if (serverContent.turnComplete || serverContent.generationComplete) {
       voiceDebug('turn complete');
+      clearLiveTimeout('response');
       finalizeLiveTurn();
       liveOutputPendingTurn.current = true;
       if (liveOutputSources.current.size === 0) {
         liveOutputPendingTurn.current = false;
-        setVoiceState('listening');
+        setVoicePhase('listening');
       }
     }
-  }, [finalizeLiveTurn, queueLiveAudio, stopLiveAudio, upsertLiveMessage]);
+  }, [clearLiveAudioQueue, clearLiveTimeout, finalizeLiveTurn, queueLiveAudio, scheduleLiveTimeout, showVoiceError, upsertLiveMessage]);
 
   const stopLiveSession = useCallback((announce = true) => {
     liveSessionId.current += 1;
+    clearLiveTimeouts();
     liveSetupReady.current = false;
+    if (liveSessionTimer.current) {
+      window.clearTimeout(liveSessionTimer.current);
+      liveSessionTimer.current = null;
+    }
     liveTokenAbort.current?.abort();
     liveTokenAbort.current = null;
     const socket = liveSocket.current;
     liveSocket.current = null;
     if (socket && (socket.readyState === window.WebSocket.OPEN || socket.readyState === window.WebSocket.CONNECTING)) socket.close(1000, 'Session stopped');
     stopLiveMicrophone();
-    stopLiveAudio();
+    closeLiveOutputContext();
+    livePendingAudio.current = [];
+    setHasPendingAudio(false);
+    setAudioPlaybackBlocked(false);
     liveInputTranscript.current = '';
     liveOutputTranscript.current = '';
     liveUserMessageId.current = null;
     liveAssistantMessageId.current = null;
     setPlayingMessageId(null);
-    setVoiceState('idle');
+    setVoicePhase('stopped');
     if (announce) showNotice('Voice session stopped.');
-  }, [showNotice, stopLiveAudio, stopLiveMicrophone]);
+  }, [clearLiveTimeouts, closeLiveOutputContext, showNotice, stopLiveMicrophone]);
 
-  const startLiveMicrophone = useCallback((stream, socket, sessionId) => {
+  stopLiveSessionRef.current = stopLiveSession;
+
+  const startLiveMicrophone = useCallback(async (stream, socket, sessionId) => {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (typeof AudioContextClass !== 'function') throw new Error('Live audio is not supported in this browser.');
-    if (typeof AudioContextClass.prototype?.createScriptProcessor !== 'function') throw new Error('Live microphone capture is not supported in this browser.');
+    if (window.isSecureContext === false && !['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+      throw new Error('Microphone access requires a secure HTTPS connection.');
+    }
+
+    const tracks = stream.getAudioTracks?.() || stream.getTracks?.() || [];
+    const track = tracks.find((candidate) => candidate.kind === 'audio' || !candidate.kind);
+    if (!track) throw new Error('No microphone track was found.');
+    if (track.readyState && track.readyState !== 'live') throw new Error('The microphone track is not live.');
 
     const context = new AudioContextClass();
-    const source = context.createMediaStreamSource(stream);
-    const processor = context.createScriptProcessor(4096, 1, 1);
-    const silence = context.createGain();
-    silence.gain.value = 0;
-    processor.onaudioprocess = (event) => {
-      if (liveSessionId.current !== sessionId || socket.readyState !== window.WebSocket.OPEN) return;
-      const input = event.inputBuffer.getChannelData(0);
-      const pcm = downsampleToPcm16(input, context.sampleRate || LIVE_INPUT_SAMPLE_RATE);
-      socket.send(JSON.stringify({
-        realtimeInput: {
-          audio: {
-            data: arrayBufferToBase64(pcm.buffer),
-            mimeType: `audio/pcm;rate=${LIVE_INPUT_SAMPLE_RATE}`,
-          },
-        },
-      }));
+    try {
+      await context.resume?.();
+    } catch {
+      context.close?.().catch?.(() => {});
+      throw new Error('The microphone audio context could not start.');
+    }
+    if (context.state !== 'running') {
+      context.close?.().catch?.(() => {});
+      throw new Error('The microphone audio context is suspended. Try tapping Argue again.');
+    }
+    voiceDebug('microphone context', { state: context.state, trackState: track.readyState || 'live' });
+
+    const armInactivityTimeout = () => {
+      if (liveMicInactivityTimer.current) window.clearTimeout(liveMicInactivityTimer.current);
+      liveMicInactivityTimer.current = window.setTimeout(() => {
+        if (liveSessionId.current !== sessionId) return;
+        voiceDebug('inactivity timeout');
+        stopLiveSession(false);
+        showNotice('Voice session ended after a long pause.');
+      }, LIVE_SILENCE_TIMEOUT_MS);
     };
-    source.connect(processor);
-    processor.connect(silence);
-    silence.connect(context.destination);
+    let firstChunkLogged = false;
+    const sendSamples = (input) => {
+      if (liveSessionId.current !== sessionId || socket.readyState !== window.WebSocket.OPEN) return;
+      if (!input?.length) return;
+      let energy = 0;
+      for (let index = 0; index < input.length; index += 1) energy += input[index] * input[index];
+      const rms = Math.sqrt(energy / input.length);
+      liveAudioMetrics.current.rms = rms;
+      if (rms >= LIVE_SPEECH_RMS_THRESHOLD) {
+        armInactivityTimeout();
+        if (!liveAudioMetrics.current.speechDetected) {
+          liveAudioMetrics.current.speechDetected = true;
+          clearLiveTimeout('no-audio');
+          setVoicePhase('speech-detected');
+          voiceDebug('microphone level', { rms: Number(rms.toFixed(4)), trackState: track.readyState || 'live' });
+        }
+      }
+      const pcm = downsampleToPcm16(input, context.sampleRate || LIVE_INPUT_SAMPLE_RATE);
+      if (!pcm.length) return;
+      try {
+        const encoded = arrayBufferToBase64(pcm.buffer);
+        socket.send(JSON.stringify({
+          realtimeInput: {
+            audio: {
+              data: encoded,
+              mimeType: `audio/pcm;rate=${LIVE_INPUT_SAMPLE_RATE}`,
+            },
+          },
+        }));
+        liveAudioMetrics.current.chunksSent += 1;
+        liveAudioMetrics.current.bytesSent += pcm.byteLength;
+        clearLiveTimeout('first-chunk');
+      } catch (error) {
+        voiceDebug('audio chunk failed', { name: error?.name || 'Error' });
+      }
+      if (!firstChunkLogged) {
+        firstChunkLogged = true;
+        voiceDebug('audio chunk sent', { sampleRate: LIVE_INPUT_SAMPLE_RATE, bytes: pcm.byteLength });
+      }
+    };
+
+    let capture = null;
+    try {
+      capture = await createAudioWorkletCapture(context, stream, sendSamples);
+    } catch {
+      capture = null;
+    }
+
+    if (!capture) {
+      if (typeof AudioContextClass.prototype?.createScriptProcessor !== 'function') {
+        context.close?.().catch?.(() => {});
+        throw new Error('Live microphone capture is not supported in this browser.');
+      }
+      const source = context.createMediaStreamSource(stream);
+      const processor = context.createScriptProcessor(4096, 1, 1);
+      const silence = context.createGain();
+      silence.gain.value = 0;
+      processor.onaudioprocess = (event) => sendSamples(event.inputBuffer.getChannelData(0));
+      source.connect(processor);
+      processor.connect(silence);
+      silence.connect(context.destination);
+      capture = { source, processor, silence };
+    }
+
+    if (liveSessionId.current !== sessionId || socket.readyState !== window.WebSocket.OPEN) {
+      capture.processor.port?.close?.();
+      capture.processor.disconnect?.();
+      capture.source.disconnect?.();
+      capture.silence.disconnect?.();
+      context.close?.().catch?.(() => {});
+      return;
+    }
+
     context.resume?.().catch?.(() => {});
     liveMicContext.current = context;
-    liveMicSource.current = source;
-    liveMicProcessor.current = processor;
-    liveMicSilence.current = silence;
-  }, []);
+    liveMicSource.current = capture.source;
+    liveMicProcessor.current = capture.processor;
+    liveMicSilence.current = capture.silence;
+    armInactivityTimeout();
+    scheduleLiveTimeout('first-chunk', LIVE_FIRST_CHUNK_TIMEOUT_MS, sessionId, () => {
+      stopLiveSession(false);
+      showVoiceError(new Error('The microphone did not produce audio.'), 'starting-microphone');
+    });
+    scheduleLiveTimeout('no-audio', LIVE_NO_AUDIO_TIMEOUT_MS, sessionId, () => {
+      if (liveAudioMetrics.current.speechDetected) return;
+      stopLiveSession(false);
+      showVoiceError(new Error('Your microphone is connected, but no audio is being received.'), 'starting-microphone');
+    });
+    voiceDebug('mic started', { transport: capture.processor.port ? 'audio-worklet' : 'script-processor' });
+  }, [clearLiveTimeout, scheduleLiveTimeout, showNotice, showVoiceError, stopLiveSession]);
 
   useEffect(() => {
     try {
@@ -583,8 +920,22 @@ export function App() {
     }
   }, [stopLiveSession, stopSpeechPlayback]);
 
+  useEffect(() => {
+    const stopWhenHidden = () => {
+      if (document.visibilityState === 'hidden') stopConversation(false);
+    };
+    const stopBeforePageExit = () => stopConversation(false);
+    document.addEventListener('visibilitychange', stopWhenHidden);
+    window.addEventListener('pagehide', stopBeforePageExit);
+    return () => {
+      document.removeEventListener('visibilitychange', stopWhenHidden);
+      window.removeEventListener('pagehide', stopBeforePageExit);
+    };
+  }, [stopConversation]);
+
   const startVoiceSession = async () => {
-    if (liveSocket.current || liveTokenAbort.current || voiceState !== 'idle') {
+    if (liveStartPromise.current) return;
+    if (liveSocket.current || !['idle', 'stopped', 'error'].includes(voicePhase)) {
       haptic();
       stopConversation();
       return;
@@ -601,135 +952,191 @@ export function App() {
       return;
     }
 
-    const sessionId = liveSessionId.current + 1;
-    liveSessionId.current = sessionId;
-    liveSetupReady.current = false;
-    const controller = new AbortController();
-    liveTokenAbort.current = controller;
-
-    let stream;
-    try {
-      const outputContext = new AudioContextClass();
-      liveOutputContext.current = outputContext;
-      const outputResume = outputContext.resume?.();
-      outputResume?.catch?.(() => {});
-
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-      if (liveSessionId.current !== sessionId) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-
-      liveStream.current = stream;
-      await outputContext.resume?.();
-      setVoiceState('thinking');
-      haptic();
-
-      const token = await requestLiveToken(mode, controller.signal);
-      if (liveSessionId.current !== sessionId) {
-        stream.getTracks().forEach((track) => track.stop());
-        stopLiveAudio();
-        return;
-      }
-
-      const apiVersion = token.apiVersion || LIVE_API_VERSION;
-      const socket = new window.WebSocket(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${apiVersion}.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(token.token)}`);
-      socket.binaryType = 'arraybuffer';
-      liveSocket.current = socket;
-      socket.onopen = () => {
+    const startPromise = (async () => {
+      const sessionId = liveSessionId.current + 1;
+      liveSessionId.current = sessionId;
+      liveSetupReady.current = false;
+      liveAudioMetrics.current = { chunksSent: 0, bytesSent: 0, chunksReceived: 0, bytesReceived: 0, rms: 0, speechDetected: false };
+      livePendingAudio.current = [];
+      setHasPendingAudio(false);
+      setAudioPlaybackBlocked(false);
+      setLastVoiceError('');
+      setVoicePhase('requesting-permission');
+      liveSessionTimer.current = window.setTimeout(() => {
         if (liveSessionId.current !== sessionId) return;
+        voiceDebug('session timeout');
+        stopLiveSession(false);
+        showVoiceError(new Error('Free voice sessions are limited to 60 seconds.'), 'session-limit');
+      }, LIVE_SESSION_MAX_MS);
+      const controller = new AbortController();
+      liveTokenAbort.current = controller;
+
+      let stream;
+      try {
+        const outputContext = new AudioContextClass();
+        liveOutputContext.current = outputContext;
         try {
-          voiceDebug('socket opened');
-          socket.send(JSON.stringify({
-            setup: {
-              model: `models/${token.model}`,
-              generationConfig: {
-                responseModalities: ['AUDIO'],
-                speechConfig: {
-                  voiceConfig: { prebuiltVoiceConfig: { voiceName: token.voice || 'Kore' } },
-                },
-                thinkingConfig: { thinkingLevel: 'low' },
-              },
-              inputAudioTranscription: {},
-              outputAudioTranscription: {},
-              systemInstruction: { parts: [{ text: liveSystemInstruction(mode) }] },
-              realtimeInputConfig: {
-                automaticActivityDetection: {
-                  disabled: false,
-                  prefixPaddingMs: 250,
-                  silenceDurationMs: 700,
-                },
-              },
-            },
-          }));
-          voiceDebug('setup sent', { apiVersion, model: token.model });
-          setVoiceState('thinking');
-        } catch (error) {
-          stopLiveSession(false);
-          showVoiceError(error);
-        }
-      };
-      socket.onmessage = (event) => {
-        let payload;
-        try {
-          const raw = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
-          payload = JSON.parse(raw);
+          await outputContext.resume?.();
         } catch {
-          payload = null;
+          setAudioPlaybackBlocked(true);
         }
+        voiceDebug('output context', { state: outputContext.state });
 
-        if (payload?.setupComplete && liveSessionId.current === sessionId && !liveSetupReady.current) {
-          try {
-            liveSetupReady.current = true;
-            startLiveMicrophone(stream, socket, sessionId);
-            voiceDebug('setup complete; microphone started');
-            setVoiceState('listening');
-          } catch (error) {
-            stopLiveSession(false);
-            showVoiceError(error);
-            return;
-          }
-        }
-
-        if (payload?.error && liveSessionId.current === sessionId) {
-          stopLiveSession(false);
-          showVoiceError(new Error('Gemini Live rejected the session setup.'));
+        setVoicePhase('requesting-permission');
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+        if (liveSessionId.current !== sessionId) {
+          stream.getTracks().forEach((track) => track.stop());
           return;
         }
 
-        handleLiveMessage(event, sessionId);
-      };
-      socket.onerror = () => {
+        const tracks = stream.getAudioTracks?.() || stream.getTracks?.() || [];
+        const track = tracks.find((candidate) => candidate.kind === 'audio' || !candidate.kind);
+        if (!track) throw new Error('No microphone was found.');
+        if (track.readyState && track.readyState !== 'live') throw new Error('The microphone is not available.');
+        track.onended = () => {
+          if (liveSessionId.current !== sessionId) return;
+          stopLiveSession(false);
+          showVoiceError(new Error('The microphone disconnected.'), 'starting-microphone');
+        };
+        liveStream.current = stream;
+
+        setVoicePhase('requesting-token');
+        scheduleLiveTimeout('token', LIVE_TOKEN_TIMEOUT_MS, sessionId, () => {
+          controller.abort();
+          stopLiveSession(false);
+          showVoiceError(new Error('Gemini Live token creation timed out.'), 'requesting-token');
+        });
+        const token = await requestLiveToken(mode, controller.signal);
+        clearLiveTimeout('token');
+        if (liveSessionId.current !== sessionId) {
+          stream.getTracks().forEach((mediaTrack) => mediaTrack.stop());
+          return;
+        }
+
+        setVoicePhase('opening-socket');
+        const apiVersion = token.apiVersion || LIVE_API_VERSION;
+        const socket = new window.WebSocket(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${apiVersion}.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(token.token)}`);
+        socket.binaryType = 'arraybuffer';
+        liveSocket.current = socket;
+        scheduleLiveTimeout('socket', LIVE_SOCKET_TIMEOUT_MS, sessionId, () => {
+          stopLiveSession(false);
+          showVoiceError(new Error('Gemini Live did not open a connection.'), 'opening-socket');
+        });
+        socket.onopen = () => {
+          if (liveSessionId.current !== sessionId) return;
+          try {
+            clearLiveTimeout('socket');
+            voiceDebug('socket opened');
+            setVoicePhase('sending-setup');
+            socket.send(JSON.stringify({
+              setup: {
+                model: `models/${token.model}`,
+                generationConfig: {
+                  responseModalities: ['AUDIO'],
+                  speechConfig: {
+                    voiceConfig: { prebuiltVoiceConfig: { voiceName: token.voice || 'Kore' } },
+                  },
+                  thinkingConfig: { thinkingLevel: 'low' },
+                },
+                inputAudioTranscription: {},
+                outputAudioTranscription: {},
+                systemInstruction: { parts: [{ text: liveSystemInstruction(mode) }] },
+                realtimeInputConfig: {
+                  automaticActivityDetection: {
+                    disabled: false,
+                    prefixPaddingMs: 250,
+                    silenceDurationMs: 700,
+                  },
+                },
+              },
+            }));
+            voiceDebug('setup sent', { apiVersion, model: token.model });
+            setVoicePhase('waiting-for-setup');
+            scheduleLiveTimeout('setup', LIVE_SETUP_TIMEOUT_MS, sessionId, () => {
+              stopLiveSession(false);
+              showVoiceError(new Error('Gemini Live did not confirm setup.'), 'waiting-for-setup');
+            });
+          } catch (error) {
+            stopLiveSession(false);
+            showVoiceError(error, 'sending-setup');
+          }
+        };
+        socket.onmessage = (event) => {
+          let payload;
+          try {
+            const raw = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
+            payload = JSON.parse(raw);
+          } catch {
+            payload = null;
+          }
+
+          if (payload?.setupComplete && liveSessionId.current === sessionId && !liveSetupReady.current) {
+            clearLiveTimeout('setup');
+            liveSetupReady.current = true;
+            setVoicePhase('starting-microphone');
+            startLiveMicrophone(stream, socket, sessionId)
+              .then(() => {
+                if (liveSessionId.current !== sessionId) return;
+                voiceDebug('setup complete; microphone started');
+                setVoicePhase('listening');
+              })
+              .catch((error) => {
+                if (liveSessionId.current !== sessionId) return;
+                stopLiveSession(false);
+                showVoiceError(error, 'starting-microphone');
+              });
+          }
+
+          if (payload?.error && liveSessionId.current === sessionId) {
+            const message = payload.error.message || 'Gemini Live rejected the session setup.';
+            stopLiveSession(false);
+            showVoiceError(new Error(String(message).slice(0, 180)), 'waiting-for-setup');
+            return;
+          }
+
+          handleLiveMessage(event, sessionId);
+        };
+        socket.onerror = () => {
+          if (liveSessionId.current !== sessionId) return;
+          stopLiveSession(false);
+          showVoiceError(new Error('Gemini Live connection failed.'), 'opening-socket');
+        };
+        socket.onclose = (event) => {
+          if (liveSessionId.current !== sessionId) return;
+          clearLiveTimeouts();
+          voiceDebug('socket closed', { code: event.code, reason: String(event.reason || '').slice(0, 120) });
+          stopLiveSession(false);
+          if (event.code !== 1000) showVoiceError(new Error(`Gemini Live closed (${event.code})${event.reason ? `: ${String(event.reason).slice(0, 100)}` : ''}`), 'socket');
+        };
+      } catch (error) {
         if (liveSessionId.current !== sessionId) return;
         stopLiveSession(false);
-        showVoiceError(new Error('Gemini Live connection failed.'));
-      };
-      socket.onclose = (event) => {
-        if (liveSessionId.current !== sessionId) return;
-        voiceDebug('socket closed', { code: event.code });
-        stopLiveSession(false);
-        if (event.code !== 1000) showVoiceError(new Error('Gemini Live disconnected.'));
-      };
-    } catch (error) {
-      if (liveSessionId.current !== sessionId) return;
-      stopLiveSession(false);
-      if (error?.name !== 'AbortError') showVoiceError(error);
+        clearLiveTimeouts();
+        if (error?.name !== 'AbortError') showVoiceError(error, error?.stage || voicePhase);
+      } finally {
+        if (liveTokenAbort.current === controller) liveTokenAbort.current = null;
+      }
+    })();
+
+    liveStartPromise.current = startPromise;
+    try {
+      await startPromise;
     } finally {
-      if (liveTokenAbort.current === controller) liveTokenAbort.current = null;
+      if (liveStartPromise.current === startPromise) liveStartPromise.current = null;
     }
   };
 
   const sendDraft = async (event) => {
     event?.preventDefault();
     const value = draft.trim();
-    if (!value || voiceState !== 'idle') return;
+    if (!value || !['idle', 'stopped'].includes(voicePhase)) return;
 
     haptic();
     const sessionMode = mode;
@@ -737,7 +1144,7 @@ export function App() {
     const nextMessages = [...messages, userMessage];
     setMessages(nextMessages);
     setDraft('');
-    setVoiceState('thinking');
+    setVoicePhase('thinking');
 
     try {
       const response = await requestJson('/api/chat', {
@@ -749,7 +1156,7 @@ export function App() {
     } catch (error) {
       showNotice(error.message);
     } finally {
-      setVoiceState('idle');
+      setVoicePhase('idle');
     }
   };
 
@@ -828,9 +1235,20 @@ export function App() {
     setSettings((current) => ({ ...current, ...changes }));
   };
 
+  const resetVoiceSettings = () => {
+    setSettings((current) => ({
+      ...current,
+      autoPlayVoice: defaultSettings.autoPlayVoice,
+      selectedVoice: defaultSettings.selectedVoice,
+      speakingSpeed: String(VOICE_PLAYBACK_RATE),
+      settingsVersion: SETTINGS_VERSION,
+    }));
+    showNotice('Voice settings reset.');
+  };
+
   const navigate = (destination) => {
     haptic();
-    if (destination !== activeNav && voiceState !== 'idle') stopConversation(false);
+    if (destination !== activeNav && !['idle', 'stopped'].includes(voicePhase)) stopConversation(false);
     stopSpeechPlayback();
     setPlayingMessageId(null);
     setActiveNav(destination);
@@ -877,6 +1295,11 @@ export function App() {
                     inputMode={inputMode}
                     setInputMode={setInputMode}
                     voiceState={voiceState}
+                    voicePhase={voicePhase}
+                    lastVoiceError={lastVoiceError}
+                    hasPendingAudio={hasPendingAudio}
+                    audioPlaybackBlocked={audioPlaybackBlocked}
+                    playPendingResponse={playPendingResponse}
                     startVoiceSession={startVoiceSession}
                     messages={messages}
                     messageLimit={settings.compactTranscript ? 2 : 4}
@@ -917,6 +1340,7 @@ export function App() {
           section={settingsSection}
           settings={settings}
           onChange={updateSettings}
+          onResetVoiceSettings={resetVoiceSettings}
           onClose={closeSettings}
         />
       )}
@@ -926,13 +1350,15 @@ export function App() {
   );
 }
 
-function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, startVoiceSession, messages, messageLimit, draft, setDraft, sendDraft, copyMessage, copiedId, playingMessageId, replayMessage, openSettings }) {
-  const activeState = ['transcribing', 'thinking', 'generating'].includes(voiceState) ? 'thinking' : voiceState;
-  const isBusy = voiceState !== 'idle';
+function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, voicePhase, lastVoiceError, hasPendingAudio, audioPlaybackBlocked, playPendingResponse, startVoiceSession, messages, messageLimit, draft, setDraft, sendDraft, copyMessage, copiedId, playingMessageId, replayMessage, openSettings }) {
+  const activeState = voiceUiStateForPhase(voicePhase);
+  const isBusy = !['idle', 'stopped', 'error'].includes(voicePhase);
+  const debugEnabled = new URLSearchParams(window.location.search).get('voiceDebug') === '1';
   const transcriptRef = useRef(null);
   const inputRef = useRef(null);
   const visibleMessages = messages.slice(-messageLimit);
-  const buttonText = isBusy ? voiceButtonLabels[voiceState] : mode.toUpperCase();
+  const liveMessages = messages.filter((message) => message.id.startsWith('live-')).slice(-2);
+  const buttonText = voicePhase === 'error' ? voiceButtonLabels.error : isBusy ? voiceButtonLabels[voiceState] : mode.toUpperCase();
   const compactButtonText = buttonText.length > 8;
 
   useEffect(() => {
@@ -1005,7 +1431,7 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, startV
       {inputMode === 'voice' && (
         <section className={isBusy ? 'voice-zone busy' : 'voice-zone'} aria-label="Voice conversation control">
           <div className="desktop-waveform-backdrop" aria-hidden="true" />
-          <button className="voice-orbit" type="button" onClick={startVoiceSession} aria-label={isBusy ? 'Stop voice session' : 'Start voice session'}>
+          <button className="voice-orbit" type="button" onClick={startVoiceSession} aria-label={isBusy ? 'Stop voice session' : voicePhase === 'error' ? 'Retry voice session' : 'Start voice session'}>
             <span className="voice-core">
               <Waveform className="core-waveform" size={45} weight="bold" />
               <strong className={compactButtonText ? 'compact-label' : ''}>{buttonText}</strong>
@@ -1017,13 +1443,25 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, startV
             <StateItem icon={<Sparkle size={23} weight="fill" />} label="Thinking" active={activeState === 'thinking'} />
             <StateItem icon={<Waveform size={24} weight="bold" />} label="Speaking" active={activeState === 'speaking'} />
           </div>
-          <p className="voice-caption">{voiceStatusCopy[voiceState]}</p>
+          <p className="voice-caption">{voicePhase === 'error' && lastVoiceError ? lastVoiceError : voiceStatusCopy[voiceState]}</p>
+          {(liveMessages.length > 0 || hasPendingAudio || audioPlaybackBlocked) && (
+            <div className="live-transcript" aria-label="Live voice transcript">
+              {liveMessages.map((message) => <p key={message.id}><strong>{message.role === 'user' ? 'YOU' : 'ARGUE AI'}</strong> {message.text}</p>)}
+              {(hasPendingAudio || audioPlaybackBlocked) && (
+                <button type="button" className="live-playback-button" onClick={playPendingResponse}>
+                  {audioPlaybackBlocked ? 'Tap to enable audio' : 'Play response'}
+                </button>
+              )}
+            </div>
+          )}
+          {debugEnabled && <div className="voice-debug-panel" aria-label="Voice diagnostics"><strong>{voicePhase}</strong><span>{lastVoiceError || 'No error'}</span><small>Detailed diagnostics are in the browser console.</small></div>}
           <div className="desktop-feature-grid" aria-label="Argue AI benefits">
             <FeatureCard icon={<ShieldCheck size={22} weight="fill" />} title="Defend your point" copy="Build stronger arguments" />
             <FeatureCard icon={<Target size={22} weight="fill" />} title="Win the discussion" copy="Counter with confidence" />
             <FeatureCard icon={<ChartLineUp size={22} weight="fill" />} title="Track your progress" copy="Improve over time" />
           </div>
           <span className="sr-only" role="status">Voice status: {voiceState}</span>
+          <span className="sr-only">Voice phase: {voicePhase}</span>
         </section>
       )}
 
@@ -1246,7 +1684,7 @@ function ProfileScreen({ onOpenSettings, onAction }) {
   );
 }
 
-function SettingsSheet({ section, settings, onChange, onClose }) {
+function SettingsSheet({ section, settings, onChange, onResetVoiceSettings, onClose }) {
   const sheetRef = useRef(null);
   const closeButtonRef = useRef(null);
   const title = section === 'voice' ? 'Voice settings' : 'App preferences';
@@ -1294,11 +1732,16 @@ function SettingsSheet({ section, settings, onChange, onClose }) {
               <button className={settings.autoPlayVoice ? 'toggle on' : 'toggle'} type="button" role="switch" aria-checked={settings.autoPlayVoice} aria-label="Automatic voice playback" onClick={() => onChange({ autoPlayVoice: !settings.autoPlayVoice })}><span /></button>
             </div>
             <label className="sheet-setting">
-              <div><strong>AI voice</strong><span>Choose the response voice</span></div>
+              <div><strong>Browser replay voice</strong><span>SpeechSynthesis replay only</span></div>
               <select className="setting-select" value={settings.selectedVoice} onChange={(event) => onChange({ selectedVoice: event.target.value })} aria-label="AI voice">
                 <option>Nova</option><option>Ember</option>
               </select>
             </label>
+            <div className="sheet-setting">
+              <div><strong>Gemini Live voice</strong><span>Controlled by the server environment</span></div>
+              <span className="setting-value">Server configured</span>
+            </div>
+            <button className="sheet-reset" type="button" onClick={onResetVoiceSettings}>Reset voice settings</button>
             {false && (
             <label className="sheet-setting">
               <div><strong>Speaking speed</strong><span>Control response playback speed</span></div>

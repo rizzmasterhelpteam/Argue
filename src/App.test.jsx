@@ -43,11 +43,16 @@ class TestWebSocket {
 }
 
 class TestAudioContext {
+  static instances = [];
+  static sources = [];
+
   constructor() {
     this.state = 'running';
     this.sampleRate = 48000;
     this.currentTime = 0;
     this.destination = {};
+    this.resume = vi.fn(() => Promise.resolve());
+    TestAudioContext.instances.push(this);
   }
 
   createMediaStreamSource() {
@@ -72,7 +77,9 @@ class TestAudioContext {
   }
 
   createBufferSource() {
-    return { buffer: null, connect: vi.fn(), disconnect: vi.fn(), start: vi.fn(), stop: vi.fn(), onended: null };
+    const source = { buffer: null, connect: vi.fn(), disconnect: vi.fn(), start: vi.fn(), stop: vi.fn(), onended: null };
+    TestAudioContext.sources.push(source);
+    return source;
   }
 
   resume() {
@@ -89,10 +96,14 @@ const flushPromises = async () => {
   for (let index = 0; index < 8; index += 1) await Promise.resolve();
 };
 
+const getLiveTokenCalls = () => fetch.mock.calls.filter(([path]) => path === '/api/live-token');
+
 describe('Argue AI', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     TestWebSocket.instances = [];
+    TestAudioContext.instances = [];
+    TestAudioContext.sources = [];
     vi.stubGlobal('WebSocket', TestWebSocket);
     vi.stubGlobal('AudioContext', TestAudioContext);
     vi.stubGlobal('speechSynthesis', { speak: vi.fn(), cancel: vi.fn(), getVoices: vi.fn(() => []) });
@@ -106,7 +117,7 @@ describe('Argue AI', () => {
     });
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true,
-      value: { getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop: vi.fn() }] })) },
+      value: { getUserMedia: vi.fn(async () => ({ getTracks: () => [{ kind: 'audio', readyState: 'live', stop: vi.fn() }] })) },
     });
     vi.stubGlobal('fetch', vi.fn(async (path, options = {}) => {
       if (path === '/api/live-token') return { ok: true, json: async () => ({ token: 'ephemeral-test-token', model: 'gemini-3.1-flash-live-preview', voice: 'Kore' }) };
@@ -208,6 +219,116 @@ describe('Argue AI', () => {
     expect(fetch).toHaveBeenCalledWith('/api/live-token', expect.objectContaining({ method: 'POST' }));
     expect(fetch).not.toHaveBeenCalledWith('/api/transcribe', expect.anything());
     expect(fetch).not.toHaveBeenCalledWith('/api/tts', expect.anything());
+  });
+
+  it('ignores a duplicate voice click while the first token request is in flight', async () => {
+    render(<App />);
+
+    const startButton = screen.getByRole('button', { name: 'Start voice session' });
+    fireEvent.click(startButton);
+    fireEvent.click(startButton);
+    await act(async () => {
+      await flushPromises();
+    });
+
+    expect(getLiveTokenCalls()).toHaveLength(1);
+  });
+
+  it('keeps the output context alive when Gemini interrupts playback', async () => {
+    render(<App />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start voice session' }));
+      await flushPromises();
+    });
+    const socket = TestWebSocket.instances.at(-1);
+    await act(async () => {
+      socket.emit({ setupComplete: {} });
+      await flushPromises();
+    });
+
+    const audioData = btoa('\u0000\u0000\u0000\u0000');
+    await act(async () => {
+      socket.emit({ serverContent: { outputTranscription: { text: 'A short reply.' }, modelTurn: { parts: [{ inlineData: { data: audioData, mimeType: 'audio/pcm;rate=24000' } }] } } });
+      await flushPromises();
+    });
+    const outputContext = TestAudioContext.instances[0];
+    const source = TestAudioContext.sources.at(-1);
+    expect(source.start).toHaveBeenCalled();
+
+    await act(async () => {
+      socket.emit({ serverContent: { interrupted: true } });
+      await flushPromises();
+    });
+    expect(outputContext.state).toBe('running');
+    expect(source.stop).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop voice session' }));
+    expect(outputContext.state).toBe('closed');
+  });
+
+  it('preserves Gemini audio and exposes Play response when autoplay is disabled', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open voice settings' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Automatic voice playback' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start voice session' }));
+      await flushPromises();
+    });
+    const socket = TestWebSocket.instances.at(-1);
+    await act(async () => {
+      socket.emit({ setupComplete: {} });
+      await flushPromises();
+      socket.emit({ serverContent: { outputTranscription: { text: 'Saved reply.' }, modelTurn: { parts: [{ inlineData: { data: btoa('\u0000\u0000\u0000\u0000'), mimeType: 'audio/pcm;rate=24000' } }] }, turnComplete: true } });
+      await flushPromises();
+    });
+
+    expect(screen.getByRole('button', { name: 'Play response' })).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Play response' }));
+      await flushPromises();
+    });
+    expect(TestAudioContext.sources.at(-1).start).toHaveBeenCalled();
+  });
+
+  it('reports a connected microphone with no usable speech', async () => {
+    render(<App />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start voice session' }));
+      await flushPromises();
+    });
+    const socket = TestWebSocket.instances.at(-1);
+    await act(async () => {
+      socket.emit({ setupComplete: {} });
+      await flushPromises();
+      vi.advanceTimersByTime(3100);
+      await flushPromises();
+    });
+
+    expect(screen.getAllByText('Your microphone is connected, but no audio is being received.').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('closes the mic, socket, and audio contexts when leaving the voice screen', async () => {
+    const trackStop = vi.fn();
+    navigator.mediaDevices.getUserMedia.mockResolvedValueOnce({ getTracks: () => [{ stop: trackStop }] });
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start voice session' }));
+      await flushPromises();
+    });
+    const socket = TestWebSocket.instances.at(-1);
+    await act(async () => {
+      socket.emit({ setupComplete: {} });
+      await flushPromises();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'History' }));
+
+    expect(trackStop).toHaveBeenCalled();
+    expect(socket.readyState).toBe(TestWebSocket.CLOSED);
+    expect(TestAudioContext.instances.every((context) => context.state === 'closed')).toBe(true);
   });
 
   it('keeps the live voice session open while Gemini handles pauses automatically', async () => {
