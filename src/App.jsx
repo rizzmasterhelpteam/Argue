@@ -1383,15 +1383,6 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
       <main aria-hidden={showSplash ? 'true' : undefined} className={settings.reducedMotion ? 'app-stage reduced-motion' : 'app-stage'}>
       <section className="device-frame" aria-label="Argue AI responsive workspace">
         <div className="device-screen">
-          <div className="status-bar" aria-hidden="true">
-            <span>9:41</span>
-            <div className="status-icons">
-              <span className="signal"><i /><i /><i /><i /></span>
-              <span className="wifi" />
-              <span className="battery"><span /></span>
-            </div>
-          </div>
-
           <div className="desktop-layout">
             <DesktopSidebar activeNav={activeNav} onNavigate={navigate} />
             <div className="desktop-main">
