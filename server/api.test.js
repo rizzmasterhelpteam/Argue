@@ -82,11 +82,12 @@ describe('authenticated Vercel API handlers', () => {
     expect(calls.rpc.map((call) => call.name)).toEqual(['consume_rate_limit', 'reserve_voice_usage']);
     const requestBody = JSON.parse(upstream.mock.calls[0][1].body);
     expect(requestBody.uses).toBe(1);
-    expect(requestBody.liveConnectConstraints).toMatchObject({
+    expect(requestBody.bidiGenerateContentSetup).toMatchObject({
       model: 'models/gemini-3.1-flash-live-preview',
-      config: { responseModalities: ['AUDIO'], sessionResumption: {} },
+      generationConfig: { responseModalities: ['AUDIO'] },
+      sessionResumption: {},
     });
-    expect(requestBody.liveConnectConstraints.config.systemInstruction.parts[0].text).toContain('Argue AI');
+    expect(requestBody.bidiGenerateContentSetup.systemInstruction.parts[0].text).toContain('Argue AI');
   });
 
   it('uses server-owned conversation history and persists both text messages', async () => {

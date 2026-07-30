@@ -192,13 +192,23 @@ async function groqCompletion({ model, messages, env, signal }) {
 export function buildLiveTokenConstraints(env, mode = 'argue') {
   return {
     model: `models/${getLiveModel(env)}`,
-    config: {
-      sessionResumption: {},
+    generationConfig: {
       responseModalities: ['AUDIO'],
       speechConfig: {
         voiceConfig: { prebuiltVoiceConfig: { voiceName: getLiveVoice(env) } },
       },
-      systemInstruction: { parts: [{ text: systemPrompt(mode) }] },
+      thinkingConfig: { thinkingLevel: 'low' },
+    },
+    systemInstruction: { parts: [{ text: systemPrompt(mode) }] },
+    inputAudioTranscription: {},
+    outputAudioTranscription: {},
+    sessionResumption: {},
+    realtimeInputConfig: {
+      automaticActivityDetection: {
+        disabled: false,
+        prefixPaddingMs: 250,
+        silenceDurationMs: 700,
+      },
     },
   };
 }
@@ -236,7 +246,7 @@ export async function handleLiveToken(request, env) {
         uses: 1,
         expireTime: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
         newSessionExpireTime: new Date(Date.now() + 60 * 1000).toISOString(),
-        liveConnectConstraints: buildLiveTokenConstraints(env, mode),
+        bidiGenerateContentSetup: buildLiveTokenConstraints(env, mode),
       }),
     }, LIVE_TOKEN_TIMEOUT_MS, request.signal);
 
