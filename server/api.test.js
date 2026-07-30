@@ -80,6 +80,7 @@ describe('authenticated Vercel API handlers', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ token: 'authTokens/test', reservationId: 'reservation-a', model: 'gemini-3.1-flash-live-preview' });
     expect(calls.rpc.map((call) => call.name)).toEqual(['consume_rate_limit', 'reserve_voice_usage']);
+    expect(calls.rpc[1].args.p_daily_limit).toBe(0);
     const requestBody = JSON.parse(upstream.mock.calls[0][1].body);
     expect(requestBody.uses).toBe(1);
     expect(requestBody.bidiGenerateContentSetup).toMatchObject({

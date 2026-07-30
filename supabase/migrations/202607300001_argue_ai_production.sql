@@ -232,7 +232,7 @@ create or replace function public.reserve_voice_usage(
   p_reservation_hash text,
   p_model text,
   p_duration_seconds integer default 60,
-  p_daily_limit integer default 5
+  p_daily_limit integer default 0
 )
 returns table (reservation_id uuid, expires_at timestamptz)
 language plpgsql
@@ -247,7 +247,7 @@ begin
   from public.voice_usage
   where user_id = p_user_id and created_at >= now() - interval '24 hours';
 
-  if v_used >= p_daily_limit then
+  if coalesce(p_daily_limit, 0) > 0 and v_used >= p_daily_limit then
     raise exception 'VOICE_DAILY_LIMIT';
   end if;
 

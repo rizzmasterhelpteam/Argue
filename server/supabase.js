@@ -68,7 +68,7 @@ export async function enforcePersistentRateLimit(supabase, { bucket, userId, win
   };
 }
 
-export async function reserveVoiceUsage(supabase, { userId, model, durationSeconds = 60, dailyLimit = 5 }) {
+export async function reserveVoiceUsage(supabase, { userId, model, durationSeconds = 60, dailyLimit = 0 }) {
   const reservationSecret = crypto.randomUUID();
   const reservationHash = await sha256(reservationSecret);
   const { data, error } = await supabase.rpc('reserve_voice_usage', {
