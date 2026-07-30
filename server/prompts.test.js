@@ -16,4 +16,11 @@ describe('systemPrompt', () => {
     expect(prompt).toContain('assertive, incisive, and unapologetically skeptical');
     expect(prompt).toContain('attack ideas and reasoning, never the user as a person');
   });
+
+  it('uses a ruthless but claim-focused Roast prompt', () => {
+    const prompt = systemPrompt('roast');
+    expect(prompt).toContain('ruthless, high-energy roast');
+    expect(prompt).toContain('Roast the idea, never the user as a person');
+    expect(prompt).toContain('same language the user uses');
+  });
 });

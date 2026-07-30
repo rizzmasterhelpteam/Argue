@@ -224,6 +224,15 @@ describe('Argue AI', () => {
     expect(fetch).not.toHaveBeenCalledWith('/api/tts', expect.anything());
   });
 
+  it('switches to Roast mode from the three-way mode control', () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Roast' }));
+
+    expect(screen.getByRole('tab', { name: 'Roast' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Bring the take. Take the heat.')).toBeInTheDocument();
+  });
+
   it('ignores a duplicate voice click while the first token request is in flight', async () => {
     render(<App />);
 

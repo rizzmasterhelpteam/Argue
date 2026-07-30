@@ -74,12 +74,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .icon-button:hover { color: var(--orange); border-color: #8a3c11; background: #17100c; }
 .header-action { position: absolute; right: 0; top: 0; }
 
-.mode-switcher { height: 58px; display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid #323336; border-radius: 31px; padding: 0; background: #0b0c0d; margin-top: 10px; overflow: hidden; }
+.mode-switcher { height: 58px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; border: 1px solid #323336; border-radius: 31px; padding: 0; background: #0b0c0d; margin-top: 10px; overflow: hidden; }
 .mode-tab { display: flex; align-items: center; justify-content: center; gap: 10px; color: #85868a; background: transparent; font-size: 15px; font-weight: 600; transition: color .28s ease, transform .28s cubic-bezier(.22, 1, .36, 1), background .28s ease, box-shadow .28s ease; }
 .mode-tab.active { color: var(--orange); border: 2px solid var(--orange); border-radius: 31px; margin: -1px; background: #0e0e0e; box-shadow: 0 8px 24px rgba(255,91,0,.12), inset 0 0 18px rgba(255,91,0,.05); animation: mode-enter .42s cubic-bezier(.22, 1, .36, 1) both; }
 .mode-tab:not(:disabled):hover { color: #f0f0f1; transform: translateY(-1px); }
 .mode-tab:not(:disabled):active { transform: scale(.96); transition-duration: .12s; }
 .mode-tab:disabled { cursor: not-allowed; opacity: .55; }
+.roast-tab.active { color: #ff9d42; border-color: #ff7a14; box-shadow: 0 8px 24px rgba(255, 91, 0, .18), inset 0 0 18px rgba(255, 91, 0, .08); }
 .tagline { margin: 11px 0 0; color: #d0d1d4; text-align: center; font-size: 15px; font-weight: 500; letter-spacing: -.02em; }
 .input-mode-switcher { width: min(220px, 100%); height: 38px; display: grid; grid-template-columns: 1fr 1fr; align-self: center; gap: 2px; margin-top: 10px; padding: 3px; border: 1px solid #2a2c2e; border-radius: 22px; background: #0b0c0d; }
 .input-mode-tab { display: flex; align-items: center; justify-content: center; gap: 6px; border-radius: 18px; color: #77797c; background: transparent; font-size: 12px; font-weight: 700; transition: color .24s ease, transform .24s cubic-bezier(.22, 1, .36, 1), background .24s ease, box-shadow .24s ease; }

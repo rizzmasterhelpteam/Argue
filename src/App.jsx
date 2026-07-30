@@ -461,7 +461,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
     let active = true;
     supabase.from('user_preferences').select('*').eq('user_id', user.id).maybeSingle().then(({ data, error }) => {
       if (!active || error || !data) return;
-      setMode(data.default_mode === 'brainstorm' ? 'Brainstorm' : 'Argue');
+      setMode(data.default_mode === 'brainstorm' ? 'Brainstorm' : data.default_mode === 'roast' ? 'Roast' : 'Argue');
       setInputMode(data.input_mode === 'text' ? 'text' : 'voice');
       setSettings((current) => ({
         ...current,
@@ -941,7 +941,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
     const timer = window.setTimeout(() => {
       supabase.from('user_preferences').upsert({
         user_id: user.id,
-        default_mode: mode === 'Brainstorm' ? 'brainstorm' : 'argue',
+        default_mode: mode === 'Brainstorm' ? 'brainstorm' : mode === 'Roast' ? 'roast' : 'argue',
         input_mode: inputMode,
         replay_voice: settings.selectedVoice,
         autoplay_voice: settings.autoPlayVoice,
@@ -1524,9 +1524,13 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, voiceP
           <Lightbulb size={26} weight="regular" />
           <span>Brainstorm</span>
         </button>
+        <button className={mode === 'Roast' ? 'mode-tab active roast-tab' : 'mode-tab roast-tab'} disabled={isBusy} onClick={() => setMode('Roast')} role="tab" aria-selected={mode === 'Roast'} type="button">
+          <Flame size={26} weight="fill" />
+          <span>Roast</span>
+        </button>
       </div>
 
-      <p className="tagline">{mode === 'Argue' ? 'Make the case.' : 'Build the idea.'}</p>
+      <p className="tagline">{mode === 'Argue' ? 'Make the case.' : mode === 'Brainstorm' ? 'Build the idea.' : 'Bring the take. Take the heat.'}</p>
       <p className="desktop-subtitle">Argue your point. Defend your ideas. Win the discussion.</p>
 
       <div className="input-mode-switcher" role="tablist" aria-label="Input mode">

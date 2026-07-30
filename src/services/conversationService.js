@@ -24,7 +24,7 @@ export function conversationForUi(conversation) {
   return {
     id: conversation.id,
     title: conversation.title,
-    mode: conversation.mode === 'brainstorm' ? 'Brainstorm' : 'Argue',
+    mode: conversation.mode === 'brainstorm' ? 'Brainstorm' : conversation.mode === 'roast' ? 'Roast' : 'Argue',
     date: new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(conversation.updated_at)),
     preview: conversation.messages?.[0]?.content || 'No messages yet.',
     count: conversation.message_count || conversation.messages?.length || 0,
@@ -63,10 +63,10 @@ export async function createConversation(mode) {
   const { data: { user }, error: userError } = await client.auth.getUser();
   throwOnError(userError);
   if (!user || user.is_anonymous) throw new Error('Your session has expired. Please sign in again.');
-  const normalizedMode = mode === 'Brainstorm' ? 'brainstorm' : 'argue';
+  const normalizedMode = mode === 'Brainstorm' ? 'brainstorm' : mode === 'Roast' ? 'roast' : 'argue';
   const { data, error } = await client
     .from('conversations')
-    .insert({ user_id: user.id, mode: normalizedMode, title: normalizedMode === 'brainstorm' ? 'New brainstorm' : 'New argument' })
+    .insert({ user_id: user.id, mode: normalizedMode, title: normalizedMode === 'brainstorm' ? 'New brainstorm' : normalizedMode === 'roast' ? 'New roast' : 'New argument' })
     .select('id,title,mode,updated_at')
     .single();
   throwOnError(error);

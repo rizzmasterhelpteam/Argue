@@ -12,7 +12,7 @@ create table if not exists public.profiles (
 
 create table if not exists public.user_preferences (
   user_id uuid primary key references auth.users(id) on delete cascade,
-  default_mode text not null default 'argue' check (default_mode in ('argue', 'brainstorm')),
+  default_mode text not null default 'argue' check (default_mode in ('argue', 'brainstorm', 'roast')),
   input_mode text not null default 'voice' check (input_mode in ('voice', 'text')),
   gemini_voice text,
   replay_voice text,
@@ -28,7 +28,7 @@ create table if not exists public.conversations (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   title text not null default 'New conversation' check (char_length(title) between 1 and 160),
-  mode text not null default 'argue' check (mode in ('argue', 'brainstorm')),
+  mode text not null default 'argue' check (mode in ('argue', 'brainstorm', 'roast')),
   archived boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
