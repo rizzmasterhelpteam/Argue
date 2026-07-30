@@ -10,4 +10,10 @@ describe('systemPrompt', () => {
       expect(prompt).not.toMatch(/no more than \d+ words/i);
     }
   });
+
+  it('keeps Argue mode direct and focused on the claim rather than personal attacks', () => {
+    const prompt = systemPrompt('argue');
+    expect(prompt).toContain('assertive, incisive, and unapologetically skeptical');
+    expect(prompt).toContain('attack ideas and reasoning, never the user as a person');
+  });
 });
