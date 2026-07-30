@@ -1432,6 +1432,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
                 {activeNav === 'Profile' && (
                   <ProfileScreen
                     user={user}
+                    conversations={conversations}
                     onOpenSettings={openSettings}
                     onAction={showNotice}
                     onLogout={onLogout}
@@ -1794,18 +1795,18 @@ function HistoryScreen({ conversations, loading, onOpenConversation, onStartNew 
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search conversations" aria-label="Search conversations" />
       </label>
       <div className="filter-row" role="group" aria-label="Filter conversations">
-        {['All', 'Argue', 'Brainstorm'].map((option) => (
+        {['All', 'Argue', 'Brainstorm', 'Roast'].map((option) => (
           <button key={option} type="button" className={filter === option ? 'filter-pill active' : 'filter-pill'} aria-pressed={filter === option} onClick={() => setFilter(option)}>{option}</button>
         ))}
       </div>
       <div className={compact ? 'history-list compact' : 'history-list'}>
         {loading ? <div className="history-empty">Loading conversations...</div> : filteredConversations.length ? filteredConversations.map((item) => (
           <button className="history-item" type="button" key={item.id || item.title} onClick={() => onOpenConversation(item)}>
-            <div className="history-icon" aria-hidden="true">{item.mode === 'Argue' ? <ChatCircleDots size={20} /> : <Lightbulb size={20} />}</div>
+            <div className={`history-icon history-icon-${item.mode.toLowerCase()}`} aria-hidden="true">{item.mode === 'Argue' ? <ChatCircleDots size={20} /> : item.mode === 'Brainstorm' ? <Lightbulb size={20} /> : <Flame size={20} weight="fill" />}</div>
             <div className="history-copy">
-              <div className="history-title"><strong>{item.title}</strong><span>{item.date}</span></div>
+              <div className="history-title"><strong>{item.title}</strong><time>{item.date}</time></div>
               <p>{item.preview}</p>
-              <small>{item.count} messages · {item.mode}</small>
+              <small><span className={`history-mode history-mode-${item.mode.toLowerCase()}`}>{item.mode}</span>{item.count} messages</small>
             </div>
           </button>
         )) : (
@@ -1817,24 +1818,38 @@ function HistoryScreen({ conversations, loading, onOpenConversation, onStartNew 
   );
 }
 
-function ProfileScreen({ user, onOpenSettings, onAction, onLogout, onDeleteAccount }) {
+function ProfileScreen({ user, conversations, onOpenSettings, onAction, onLogout, onDeleteAccount }) {
+  const modeCounts = conversations.reduce((counts, conversation) => ({
+    ...counts,
+    [conversation.mode]: (counts[conversation.mode] || 0) + 1,
+  }), {});
+  const displayName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Guest account';
+  const accountLabel = user?.email || 'Sign in to save your conversations';
+
   return (
     <div className="secondary-screen profile-screen">
       <header className="secondary-header">
         <div><span className="eyebrow">YOUR SPACE</span><h1>Profile</h1></div>
         <button className="icon-button" type="button" aria-label="Open app preferences" onClick={() => onOpenSettings('app')}><GearSix size={22} /></button>
       </header>
-      <section className="profile-card">
+      <section className="profile-card profile-hero">
         <div className="profile-avatar" aria-hidden="true"><UserCircle size={49} weight="fill" /></div>
-        <div><strong>{user?.user_metadata?.full_name || user?.email || 'Guest account'}</strong><span>{user ? 'Your Argue AI account' : 'Guest account'}</span></div>
+        <div><strong>{displayName}</strong><span>{accountLabel}</span></div>
         <button type="button" aria-label="Edit profile" onClick={() => onAction('Profile editing is not connected in this prototype.')}><SlidersHorizontal size={19} /></button>
       </section>
-      <div className="usage-card"><div><span className="eyebrow">THIS MONTH</span><strong>12 / 20</strong><p>conversations used</p></div><div className="usage-ring"><span>60%</span></div></div>
-      <div className="settings-list">
+      <section className="profile-metrics" aria-label="Conversation statistics">
+        <div><strong>{conversations.length}</strong><span>Conversations</span></div>
+        <div><strong>{modeCounts.Argue || 0}</strong><span>Arguments</span></div>
+        <div><strong>{modeCounts.Roast || 0}</strong><span>Roasts</span></div>
+      </section>
+      <section className="profile-section" aria-label="Settings">
+        <span className="profile-section-label">SETTINGS</span>
+        <div className="settings-list">
         <button type="button" onClick={() => onOpenSettings('voice')}><Waveform size={21} /><span>Voice settings</span><CaretRight size={17} /></button>
         <button type="button" onClick={() => onOpenSettings('app')}><GearSix size={21} /><span>App preferences</span><CaretRight size={17} /></button>
         <button type="button" onClick={() => onAction('Support: hello@argue.ai')}><SpeakerHigh size={21} /><span>Feedback & support</span><CaretRight size={17} /></button>
-      </div>
+        </div>
+      </section>
       {user ? (
         <div className="profile-auth-actions">
           <button className="guest-cta" type="button" onClick={() => onLogout?.().catch((error) => onAction(error.message))}>Log out</button>

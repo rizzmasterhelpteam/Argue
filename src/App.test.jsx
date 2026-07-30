@@ -402,6 +402,17 @@ describe('Argue AI', () => {
     const filters = screen.getByRole('group', { name: 'Filter conversations' });
     fireEvent.click(within(filters).getByRole('button', { name: 'Argue' }));
     expect(screen.getByText('No conversations match that search.')).toBeInTheDocument();
+    expect(within(filters).getByRole('button', { name: 'Roast' })).toBeInTheDocument();
+  });
+
+  it('shows conversation metrics on the profile screen', () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Profile' }));
+
+    expect(screen.getByText('Conversations')).toBeInTheDocument();
+    expect(screen.getByText('Arguments')).toBeInTheDocument();
+    expect(screen.getByText('Roasts')).toBeInTheDocument();
   });
 
   it('keeps voice settings after the sheet is closed and reopened', () => {
