@@ -1582,44 +1582,44 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, voiceP
       )}
 
       {inputMode === 'text' && (
-        <section className="transcript-panel" aria-label="Conversation transcript">
-          <div className="transcript-scroll" ref={transcriptRef}>
-            {visibleMessages.length ? visibleMessages.map((message) => (
-              <TranscriptCard
-                key={message.id}
-                message={message}
-                onCopy={copyMessage}
-                copied={copiedId === message.id}
-                playing={playingMessageId === message.id}
-                onReplay={replayMessage}
-              />
-            )) : (
-              <div className="empty-transcript">
-                <ChatCircleDots size={25} />
-                <p>Your next argument will appear here.</p>
-              </div>
-            )}
-          </div>
-        </section>
-      )}
+        <section className="text-workspace" aria-label="Text conversation">
+          <section className="transcript-panel" aria-label="Conversation transcript">
+            <div className="transcript-scroll" ref={transcriptRef}>
+              {visibleMessages.length ? visibleMessages.map((message) => (
+                <TranscriptCard
+                  key={message.id}
+                  message={message}
+                  onCopy={copyMessage}
+                  copied={copiedId === message.id}
+                  playing={playingMessageId === message.id}
+                  onReplay={replayMessage}
+                />
+              )) : (
+                <div className="empty-transcript">
+                  <ChatCircleDots size={25} />
+                  <p>Your next argument will appear here.</p>
+                </div>
+              )}
+            </div>
+          </section>
 
-      {inputMode === 'text' && (
-        <form className="argument-input" onSubmit={sendDraft}>
-          <TextT className="input-text-icon" size={23} weight="regular" aria-hidden="true" />
-          <textarea
-            ref={inputRef}
-            value={draft}
-            onChange={updateDraft}
-            onKeyDown={handleInputKeyDown}
-            placeholder="Type your argument"
-            aria-label="Add your argument"
-            maxLength={1000}
-            rows={1}
-          />
-          <button className={draft.trim() ? 'send-button ready' : 'send-button'} type="submit" disabled={!draft.trim() || isBusy} aria-label="Send argument">
-            <ArrowUp size={25} weight="bold" />
-          </button>
-        </form>
+          <form className="argument-input" onSubmit={sendDraft}>
+            <TextT className="input-text-icon" size={23} weight="regular" aria-hidden="true" />
+            <textarea
+              ref={inputRef}
+              value={draft}
+              onChange={updateDraft}
+              onKeyDown={handleInputKeyDown}
+              placeholder="Type your argument"
+              aria-label="Add your argument"
+              maxLength={1000}
+              rows={1}
+            />
+            <button className={draft.trim() ? 'send-button ready' : 'send-button'} type="submit" disabled={!draft.trim() || isBusy} aria-label="Send argument">
+              <ArrowUp size={25} weight="bold" />
+            </button>
+          </form>
+        </section>
       )}
     </div>
   );

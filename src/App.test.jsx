@@ -233,6 +233,17 @@ describe('Argue AI', () => {
     expect(screen.getByText('Bring the take. Take the heat.')).toBeInTheDocument();
   });
 
+  it('groups the text transcript and composer into the responsive workspace', () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Text input' }));
+
+    const workspace = document.querySelector('.text-workspace');
+    expect(workspace).not.toBeNull();
+    expect(workspace.querySelector('.transcript-panel')).not.toBeNull();
+    expect(workspace.querySelector('.argument-input')).not.toBeNull();
+  });
+
   it('ignores a duplicate voice click while the first token request is in flight', async () => {
     render(<App />);
 

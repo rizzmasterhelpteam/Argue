@@ -7,6 +7,8 @@ describe('systemPrompt', () => {
       const prompt = systemPrompt(mode);
       expect(prompt).toContain('same language the user uses');
       expect(prompt).toContain('level of detail and length the user asks for');
+      expect(prompt).toContain('Do not discuss, reveal, or speculate about the underlying model');
+      expect(prompt).toContain('calmly say that you are Argue AI');
       expect(prompt).not.toMatch(/no more than \d+ words/i);
     }
   });
@@ -20,6 +22,7 @@ describe('systemPrompt', () => {
   it('uses a ruthless but claim-focused Roast prompt', () => {
     const prompt = systemPrompt('roast');
     expect(prompt).toContain('ruthless, high-energy roast');
+    expect(prompt).toContain('dry sarcasm, clever comparisons, escalating callbacks');
     expect(prompt).toContain('Roast the idea, never the user as a person');
     expect(prompt).toContain('same language the user uses');
   });
