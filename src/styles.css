@@ -417,13 +417,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .desktop-main .voice-core { width: 198px; height: 198px; }
   .desktop-main .voice-core strong { font-size: 33px; }
   .desktop-main .core-waveform { width: 46px; height: 46px; margin-bottom: 11px; }
-  .desktop-main .state-row { z-index: 1; width: min(890px, 100%); height: 120px; min-height: 120px; margin-top: -5px; padding: 14px 44px; border: 1px solid #2a2c2f; border-radius: 25px; background: rgba(11, 12, 13, .76); }
-  .desktop-main .state-item { gap: 7px; color: #a5a7aa; font-size: 15px; }
-  .desktop-main .state-item svg { width: 28px; height: 28px; }
+.desktop-main .state-row { z-index: 1; width: min(720px, 100%); height: 84px; min-height: 84px; margin-top: -3px; padding: 9px 32px; border: 1px solid #2a2c2f; border-radius: 18px; background: rgba(11, 12, 13, .76); }
+.desktop-main .state-item { gap: 4px; color: #a5a7aa; font-size: 13px; }
+.desktop-main .state-item svg { width: 22px; height: 22px; }
   .desktop-main .state-item.active { color: var(--orange); }
   .desktop-main .state-item:not(:last-child)::after { top: 15px; right: -20%; width: 40%; border-top: 2px dotted #6d6e70; }
   .desktop-main .state-dot { width: 7px; height: 7px; }
-  .desktop-main .voice-caption { z-index: 1; margin-top: 12px; color: #aaaeb1; font-size: 15px; }
+.desktop-main .voice-caption { z-index: 1; margin-top: 8px; color: #aaaeb1; font-size: 12px; }
   .desktop-feature-grid { z-index: 1; display: grid; width: min(890px, 100%); grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 18px; }
   .desktop-feature-card { min-height: 84px; display: flex; align-items: center; gap: 14px; padding: 13px 17px; border: 1px solid #282a2d; border-radius: 12px; background: linear-gradient(145deg, #121314, #0c0d0e); }
   .desktop-feature-icon { width: 44px; height: 44px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; color: var(--orange); background: #25150b; }
@@ -526,20 +526,21 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   }
 
   .desktop-main .state-row {
-    height: 100px;
-    min-height: 100px;
-    margin-top: -4px;
-    padding: 10px 36px;
+    width: min(680px, 100%);
+    height: 76px;
+    min-height: 76px;
+    margin-top: -3px;
+    padding: 8px 28px;
   }
 
   .desktop-main .state-item {
-    gap: 5px;
-    font-size: 14px;
+    gap: 3px;
+    font-size: 12px;
   }
 
   .desktop-main .state-item svg {
-    width: 24px;
-    height: 24px;
+    width: 20px;
+    height: 20px;
   }
 
   .desktop-main .voice-caption {
@@ -715,9 +716,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   }
 
   .desktop-main .state-row {
-    height: 84px;
-    min-height: 84px;
-    padding: 8px 30px;
+    width: min(620px, 100%);
+    height: 68px;
+    min-height: 68px;
+    padding: 6px 24px;
   }
 
   .desktop-main .state-item {
