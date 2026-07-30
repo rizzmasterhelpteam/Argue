@@ -96,7 +96,7 @@ const flushPromises = async () => {
   for (let index = 0; index < 8; index += 1) await Promise.resolve();
 };
 
-const getLiveTokenCalls = () => fetch.mock.calls.filter(([path]) => path === '/api/live-token');
+const getLiveTokenCalls = () => fetch.mock.calls.filter(([path]) => path === '/api/live/token');
 
 describe('Argue AI', () => {
   beforeEach(() => {
@@ -120,7 +120,7 @@ describe('Argue AI', () => {
       value: { getUserMedia: vi.fn(async () => ({ getTracks: () => [{ kind: 'audio', readyState: 'live', stop: vi.fn() }] })) },
     });
     vi.stubGlobal('fetch', vi.fn(async (path, options = {}) => {
-      if (path === '/api/live-token') return { ok: true, json: async () => ({ token: 'ephemeral-test-token', model: 'gemini-3.1-flash-live-preview', voice: 'Kore' }) };
+      if (path === '/api/live/token') return { ok: true, json: async () => ({ token: 'ephemeral-test-token', model: 'gemini-3.1-flash-live-preview', voice: 'Kore' }) };
       const body = JSON.parse(options.body);
       return { ok: true, json: async () => ({ reply: body.mode === 'Brainstorm' ? 'Groq brainstorm response.' : 'Groq reasoning response.' }) };
     }));
@@ -216,7 +216,7 @@ describe('Argue AI', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Text input' }));
     expect(screen.getByText('AI will replace most creative jobs within five years.')).toBeInTheDocument();
     expect(screen.getByText('That claim needs evidence.')).toBeInTheDocument();
-    expect(fetch).toHaveBeenCalledWith('/api/live-token', expect.objectContaining({ method: 'POST' }));
+    expect(fetch).toHaveBeenCalledWith('/api/live/token', expect.objectContaining({ method: 'POST' }));
     expect(fetch).not.toHaveBeenCalledWith('/api/transcribe', expect.anything());
     expect(fetch).not.toHaveBeenCalledWith('/api/tts', expect.anything());
   });

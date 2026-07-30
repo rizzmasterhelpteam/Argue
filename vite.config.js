@@ -49,10 +49,12 @@ function localApiPlugin(env) {
 
 export default defineConfig(({ mode }) => {
   const localEnv = { ...process.env, ...loadEnv(mode, process.cwd(), '') };
+  const isCloudflareBuild = mode === 'cloudflare';
   return {
     plugins: [
       react(),
-      ...(isTest ? [] : [localApiPlugin(localEnv), cloudflare({ configPath: 'wrangler.json' })]),
+      ...(isTest ? [] : [localApiPlugin(localEnv)]),
+      ...(isCloudflareBuild ? [cloudflare({ configPath: 'wrangler.json' })] : []),
     ],
     server: {
       host: '0.0.0.0',

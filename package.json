@@ -5,14 +5,28 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node scripts/prepare-site-worker.mjs",
+    "build": "npm run build:vercel",
+    "build:vercel": "vite build",
+    "build:cloudflare": "vite build --mode cloudflare && node scripts/prepare-site-worker.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm run test && npm run build"
+    "lint": "eslint src server api worker vite.config.js",
+    "typecheck": "tsc --noEmit",
+    "cap:sync": "cap sync android",
+    "check": "npm run lint && npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
+    "@capacitor/app": "8.1.1",
+    "@capacitor/core": "8.4.2",
+    "@capacitor/haptics": "8.0.2",
+    "@capacitor/keyboard": "8.0.5",
+    "@capacitor/network": "8.0.1",
+    "@capacitor/preferences": "8.0.1",
+    "@capacitor/splash-screen": "8.0.2",
+    "@capacitor/status-bar": "8.0.3",
     "@phosphor-icons/react": "^2.1.7",
+    "@supabase/supabase-js": "2.111.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -20,8 +34,12 @@
     "@cloudflare/vite-plugin": "^1.44.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
+    "@capacitor/android": "8.4.2",
+    "@capacitor/cli": "8.4.2",
     "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "10.8.0",
     "jsdom": "^25.0.1",
+    "typescript": "7.0.2",
     "vite": "^6.0.7",
     "vitest": "^4.1.10",
     "wrangler": "^4.110.0"

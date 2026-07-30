@@ -1,0 +1,19 @@
+{
+  "appId": "com.argueai.app",
+  "appName": "Argue AI",
+  "webDir": "dist",
+  "plugins": {
+    "Keyboard": {
+      "resize": "body",
+      "resizeOnFullScreen": true
+    },
+    "SplashScreen": {
+      "launchAutoHide": true,
+      "backgroundColor": "#0b0b0b"
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#0b0b0b"
+    }
+  }
+}

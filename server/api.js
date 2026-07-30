@@ -1,27 +1,31 @@
+import {
+  enforcePersistentRateLimit,
+  finishVoiceUsage,
+  requireAuthenticatedUser,
+  reserveVoiceUsage,
+  writeUsageLog,
+} from './supabase.js';
+import { displayMode, normalizeMode, systemPrompt } from './prompts.js';
+
 const GROQ_API_URL = 'https://api.groq.com/openai/v1';
 const GEMINI_AUTH_TOKEN_URL = 'https://generativelanguage.googleapis.com/v1beta/auth_tokens';
 const GEMINI_LIVE_API_VERSION = 'v1beta';
-const LIVE_TOKEN_TIMEOUT_MS = 8 * 1000;
+const LIVE_TOKEN_TIMEOUT_MS = 8_000;
+const CHAT_TIMEOUT_MS = 20_000;
 
 export const DEFAULT_REASONING_MODEL = 'openai/gpt-oss-120b';
+export const DEFAULT_FALLBACK_MODEL = 'openai/gpt-oss-20b';
 export const DEFAULT_GEMINI_LIVE_MODEL = 'gemini-3.1-flash-live-preview';
 export const DEFAULT_GEMINI_LIVE_VOICE = 'Kore';
+export const MAX_CHAT_INPUT_CHARS = 2_000;
+export const MAX_CHAT_BODY_BYTES = 12_000;
+export const MAX_LIVE_TOKEN_BODY_BYTES = 1_000;
+export const MAX_MESSAGE_BODY_BYTES = 6_000;
 
-export const MAX_CHAT_INPUT_CHARS = 2000;
-export const MAX_CHAT_HISTORY_MESSAGES = 8;
-export const MAX_CHAT_MESSAGE_CHARS = 1200;
-export const MAX_CHAT_BODY_BYTES = 24000;
-export const MAX_LIVE_TOKEN_BODY_BYTES = 1000;
-
-const LIVE_TOKEN_RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
+const CHAT_RATE_LIMIT_WINDOW_SECONDS = 60;
+const CHAT_RATE_LIMIT_MAX_REQUESTS = 12;
+const LIVE_TOKEN_RATE_LIMIT_WINDOW_SECONDS = 300;
 const LIVE_TOKEN_RATE_LIMIT_MAX_REQUESTS = 20;
-const LIVE_SESSION_RATE_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
-const LIVE_SESSION_RATE_LIMIT_MAX_REQUESTS = 5;
-
-// Vercel functions are intentionally stateless for this MVP. These maps protect
-// warm instances without adding a paid/shared store to the Hobby deployment.
-const liveTokenRateLimits = new Map();
-const liveSessionRateLimits = new Map();
 
 export class ApiError extends Error {
   constructor(message, status = 500, retryAfterSeconds = null, details = {}) {
@@ -35,13 +39,14 @@ export class ApiError extends Error {
 }
 
 export function json(body, status = 200, extraHeaders = {}) {
-  const headers = {
-    'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store',
-    ...extraHeaders,
-  };
-  if (status === 429 && !headers['retry-after']) headers['retry-after'] = '60';
-  return new Response(JSON.stringify(body), { status, headers });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+      ...extraHeaders,
+    },
+  });
 }
 
 function requestId(request) {
@@ -60,79 +65,37 @@ function safeUpstreamMessage(value) {
 export function errorResponse(error, request) {
   const status = error instanceof ApiError ? error.status : 500;
   const retryAfter = error instanceof ApiError ? error.retryAfterSeconds : null;
-  const responseRequestId = error instanceof ApiError ? error.requestId || requestId(request) : requestId(request);
-  const headers = retryAfter ? { 'retry-after': String(retryAfter) } : {};
-  const responseBody = {
+  const id = error instanceof ApiError ? error.requestId || requestId(request) : requestId(request);
+  if (!(error instanceof ApiError)) console.error('API request failed', error?.code || 'UNEXPECTED_ERROR', id);
+  return json({
     error: error instanceof ApiError ? error.message : 'The AI service is temporarily unavailable.',
     code: error instanceof ApiError ? error.code : 'API_REQUEST_FAILED',
     stage: error instanceof ApiError ? error.stage : 'api',
-    requestId: responseRequestId,
-  };
-  if (!(error instanceof ApiError)) console.error('API request failed', responseBody.code, responseRequestId);
-  return json(responseBody, status, headers);
+    requestId: id,
+  }, status, retryAfter ? { 'retry-after': String(retryAfter) } : {});
 }
 
-function environmentValue(env, name) {
+function envValue(env, name) {
   const value = env?.[name];
   return typeof value === 'string' ? value.trim() : '';
 }
 
 function getGeminiApiKey(env) {
-  for (const name of ['GEMINI_API_KEY', 'GOOGLE_API_KEY']) {
-    const value = environmentValue(env, name);
-    if (value) return value;
-  }
-  return '';
+  return envValue(env, 'GEMINI_API_KEY') || envValue(env, 'GOOGLE_API_KEY');
 }
 
 function requireGroqApiKey(env) {
-  const apiKey = environmentValue(env, 'GROQ_API_KEY');
-  if (!apiKey) {
-    throw new ApiError('The AI service is not configured yet.', 503, null, {
-      code: 'GROQ_NOT_CONFIGURED',
-      stage: 'chat',
-    });
-  }
-  return apiKey;
-}
-
-function requestRateLimitKey(request) {
-  const ip = request.headers.get('x-vercel-forwarded-for')
-    || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    || request.headers.get('cf-connecting-ip')
-    || 'anonymous';
-  const user = request.headers.get('x-user-id')?.trim();
-  return user ? `${user}:${ip}` : ip;
-}
-
-function enforceRateLimit(store, request, windowMs, maxRequests, message, details) {
-  const key = requestRateLimitKey(request);
-  const now = Date.now();
-  const current = store.get(key);
-  const entry = current && now - current.startedAt < windowMs
-    ? current
-    : { startedAt: now, count: 0 };
-
-  if (entry.count >= maxRequests) {
-    const retryAfterSeconds = Math.max(1, Math.ceil((entry.startedAt + windowMs - now) / 1000));
-    throw new ApiError(message, 429, retryAfterSeconds, details);
-  }
-
-  entry.count += 1;
-  store.set(key, entry);
-  if (store.size > 1000) {
-    for (const [storedKey, storedEntry] of store) {
-      if (now - storedEntry.startedAt >= windowMs) store.delete(storedKey);
-    }
-  }
+  const key = envValue(env, 'GROQ_API_KEY');
+  if (!key) throw new ApiError('The AI service is not configured yet.', 503, null, { code: 'GROQ_NOT_CONFIGURED', stage: 'chat' });
+  return key;
 }
 
 export function getLiveModel(env) {
-  return (environmentValue(env, 'GEMINI_LIVE_MODEL') || DEFAULT_GEMINI_LIVE_MODEL).replace(/^models\//, '');
+  return (envValue(env, 'GEMINI_LIVE_MODEL') || DEFAULT_GEMINI_LIVE_MODEL).replace(/^models\//, '');
 }
 
 export function getLiveVoice(env) {
-  return environmentValue(env, 'GEMINI_LIVE_VOICE') || DEFAULT_GEMINI_LIVE_VOICE;
+  return envValue(env, 'GEMINI_LIVE_VOICE') || DEFAULT_GEMINI_LIVE_VOICE;
 }
 
 function contentLengthExceeds(request, maximum) {
@@ -140,253 +103,279 @@ function contentLengthExceeds(request, maximum) {
   return Number.isFinite(length) && length > maximum;
 }
 
-async function fetchWithTimeout(url, options, timeoutMs) {
+async function parseJson(request, details) {
+  try {
+    return await request.json();
+  } catch {
+    throw new ApiError('Please send a valid request.', 400, null, details);
+  }
+}
+
+async function fetchWithTimeout(url, options, timeoutMs, requestSignal) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const signal = requestSignal && typeof AbortSignal.any === 'function'
+    ? AbortSignal.any([controller.signal, requestSignal])
+    : controller.signal;
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    return await fetch(url, { ...options, signal });
   } finally {
     clearTimeout(timeout);
   }
 }
 
-export async function handleLiveToken(request, env) {
-  const id = requestId(request);
-  if (contentLengthExceeds(request, MAX_LIVE_TOKEN_BODY_BYTES)) {
-    throw new ApiError('That voice session request is too large.', 413, null, {
-      code: 'REQUEST_TOO_LARGE',
-      stage: 'token_creation',
-      requestId: id,
-    });
-  }
-
-  const apiKey = getGeminiApiKey(env);
-  if (!apiKey) {
-    throw new ApiError('Gemini Live is not configured yet.', 503, null, {
-      code: 'GEMINI_NOT_CONFIGURED',
-      stage: 'token_creation',
-      requestId: id,
-    });
-  }
-
-  let payload = {};
-  try {
-    payload = await request.json();
-  } catch {
-    // An empty body is valid; Argue is the default mode.
-  }
-
-  const mode = payload?.mode === 'Brainstorm' ? 'Brainstorm' : 'Argue';
-  enforceRateLimit(
-    liveTokenRateLimits,
-    request,
-    LIVE_TOKEN_RATE_LIMIT_WINDOW_MS,
-    LIVE_TOKEN_RATE_LIMIT_MAX_REQUESTS,
-    'Too many voice starts. Please wait a few minutes and try again.',
-    { code: 'RATE_LIMITED', stage: 'rate_limit', requestId: id },
-  );
-  enforceRateLimit(
-    liveSessionRateLimits,
-    request,
-    LIVE_SESSION_RATE_LIMIT_WINDOW_MS,
-    LIVE_SESSION_RATE_LIMIT_MAX_REQUESTS,
-    'The free voice limit is 5 sessions per day. Please try again tomorrow.',
-    { code: 'RATE_LIMITED', stage: 'rate_limit', requestId: id },
-  );
-
-  let tokenResponse;
-  try {
-    tokenResponse = await fetchWithTimeout(GEMINI_AUTH_TOKEN_URL, {
-      method: 'POST',
-      headers: {
-        'x-goog-api-key': apiKey,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        uses: 1,
-        expireTime: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-        newSessionExpireTime: new Date(Date.now() + 60 * 1000).toISOString(),
-      }),
-    }, LIVE_TOKEN_TIMEOUT_MS);
-  } catch (error) {
-    if (error?.name === 'AbortError') {
-      throw new ApiError('Gemini Live token creation timed out. Please try again.', 504, 5, {
-        code: 'GEMINI_UPSTREAM_UNAVAILABLE',
-        stage: 'token_creation',
-        requestId: id,
-      });
-    }
-    throw new ApiError('Gemini Live is temporarily unavailable.', 502, null, {
-      code: 'GEMINI_UPSTREAM_UNAVAILABLE',
-      stage: 'token_creation',
-      requestId: id,
-    });
-  }
-
-  if (!tokenResponse.ok) {
-    const errorData = await tokenResponse.json().catch(() => null);
-    const upstreamError = errorData?.error || {};
-    console.error('Gemini Live token provisioning failed', {
-      requestId: id,
-      httpStatus: tokenResponse.status,
-      status: upstreamError.status || '',
-      code: upstreamError.code || tokenResponse.status,
-      message: safeUpstreamMessage(upstreamError.message),
-    });
-    if (tokenResponse.status === 401) {
-      throw new ApiError('Gemini Live rejected the API key.', 502, null, { code: 'GEMINI_INVALID_KEY', stage: 'token_creation', requestId: id });
-    }
-    if (tokenResponse.status === 403) {
-      throw new ApiError('Gemini Live access is not enabled for this API key.', 502, null, { code: 'GEMINI_PERMISSION_DENIED', stage: 'token_creation', requestId: id });
-    }
-    if (tokenResponse.status === 404) {
-      throw new ApiError('The configured Gemini Live model is unavailable.', 502, null, { code: 'GEMINI_MODEL_UNAVAILABLE', stage: 'token_creation', requestId: id });
-    }
-    if (tokenResponse.status === 429) {
-      throw new ApiError('Gemini Live quota is temporarily exhausted.', 429, 60, { code: 'GEMINI_QUOTA_EXHAUSTED', stage: 'token_creation', requestId: id });
-    }
-    if (tokenResponse.status === 400) {
-      throw new ApiError('Gemini Live rejected the session request.', 502, null, { code: 'GEMINI_TOKEN_REQUEST_REJECTED', stage: 'token_creation', requestId: id });
-    }
-    throw new ApiError('Gemini Live is temporarily unavailable.', 502, null, { code: 'GEMINI_UPSTREAM_UNAVAILABLE', stage: 'token_creation', requestId: id });
-  }
-
-  const tokenData = await tokenResponse.json().catch(() => null);
-  if (!tokenData?.name) {
-    throw new ApiError('Gemini Live returned an invalid session token.', 502, null, {
-      code: 'GEMINI_TOKEN_REQUEST_REJECTED',
-      stage: 'token_creation',
-      requestId: id,
-    });
-  }
-
-  return json({
-    token: tokenData.name,
-    model: getLiveModel(env),
-    voice: getLiveVoice(env),
-    apiVersion: GEMINI_LIVE_API_VERSION,
-    expiresAt: tokenData.expireTime || null,
-    mode,
-  });
+async function authenticate(request, env, id, stage) {
+  const result = await requireAuthenticatedUser(request, env);
+  if (result.error) throw new ApiError(result.error.message, result.error.status, null, { code: result.error.code, stage, requestId: id });
+  return result;
 }
 
-function getMessageContent(message) {
-  const content = message?.content;
-  if (typeof content === 'string') return content.trim().slice(0, MAX_CHAT_MESSAGE_CHARS);
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => (typeof part === 'string' ? part : part?.text || ''))
-      .join(' ')
-      .trim()
-      .slice(0, MAX_CHAT_MESSAGE_CHARS);
+async function assertOwnedConversation(supabase, userId, conversationId, id) {
+  if (typeof conversationId !== 'string' || !conversationId) {
+    throw new ApiError('A conversation is required.', 400, null, { code: 'INVALID_CONVERSATION', stage: 'chat', requestId: id });
   }
-  return '';
+  const { data, error } = await supabase
+    .from('conversations')
+    .select('id,user_id,mode,archived')
+    .eq('id', conversationId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data || data.user_id !== userId || data.archived) {
+    throw new ApiError('That conversation is unavailable.', 403, null, { code: 'CONVERSATION_FORBIDDEN', stage: 'chat', requestId: id });
+  }
+  return data;
 }
 
-async function groqJson(path, body, env) {
-  const response = await fetch(`${GROQ_API_URL}${path}`, {
+async function enforceRateLimit(supabase, options, message, id, stage) {
+  const result = await enforcePersistentRateLimit(supabase, options);
+  if (!result.allowed) throw new ApiError(message, 429, result.retryAfterSeconds, { code: 'RATE_LIMITED', stage, requestId: id });
+}
+
+function getMessageContent(value) {
+  return typeof value === 'string' ? value.trim().slice(0, 4_000) : '';
+}
+
+function responseMessage(row) {
+  return {
+    id: row.id,
+    role: row.role,
+    source: row.source,
+    content: row.content,
+    model: row.model,
+    createdAt: row.created_at,
+  };
+}
+
+async function groqCompletion({ model, messages, env, signal }) {
+  const response = await fetchWithTimeout(`${GROQ_API_URL}/chat/completions`, {
     method: 'POST',
-    headers: {
-      authorization: `Bearer ${requireGroqApiKey(env)}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
+    headers: { authorization: `Bearer ${requireGroqApiKey(env)}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: 0.45,
+      max_completion_tokens: 256,
+      ...(model === 'openai/gpt-oss-20b' || model === 'openai/gpt-oss-120b' ? { reasoning_effort: 'low' } : {}),
+    }),
+  }, CHAT_TIMEOUT_MS, signal);
 
   if (!response.ok) {
-    console.error(`Groq ${path} failed with status ${response.status}`);
+    console.error('Groq request failed', response.status);
     throw new ApiError('The AI service could not complete that request.', response.status === 429 ? 429 : 502, null, {
       code: response.status === 429 ? 'GROQ_QUOTA_EXHAUSTED' : 'GROQ_UPSTREAM_UNAVAILABLE',
       stage: 'chat',
     });
   }
-
   return response.json();
 }
 
-function normalizeMessages(messages) {
-  if (!Array.isArray(messages)) return [];
-
-  return messages
-    .filter((message) => message && (message.role === 'user' || message.role === 'assistant'))
-    .map((message) => ({ role: message.role, content: getMessageContent(message) }))
-    .filter((message) => message.content)
-    .slice(-MAX_CHAT_HISTORY_MESSAGES);
+export function buildLiveTokenConstraints(env, mode = 'argue') {
+  return {
+    model: `models/${getLiveModel(env)}`,
+    config: {
+      sessionResumption: {},
+      responseModalities: ['AUDIO'],
+      speechConfig: {
+        voiceConfig: { prebuiltVoiceConfig: { voiceName: getLiveVoice(env) } },
+      },
+      systemInstruction: { parts: [{ text: systemPrompt(mode) }] },
+    },
+  };
 }
 
-function systemPrompt(mode) {
-  if (mode === 'Brainstorm') {
-    return 'You are Argue AI in Brainstorm mode: a serious, sharp thinking partner. Keep every reply compact: 2 or 3 short sentences, or up to 3 compact bullets, with a maximum of 60 words. Use plain, precise language. Surface the strongest insight, one meaningful risk or tradeoff, and one practical next step or question. Stay constructive and intellectually honest. Skip jokes, fluff, throat-clearing, headings, and long explanations. Do not claim to browse the web or know current facts unless they are provided in the conversation.';
+export async function handleLiveToken(request, env) {
+  const id = requestId(request);
+  const startedAt = Date.now();
+  if (contentLengthExceeds(request, MAX_LIVE_TOKEN_BODY_BYTES)) throw new ApiError('That voice session request is too large.', 413, null, { code: 'REQUEST_TOO_LARGE', stage: 'token_creation', requestId: id });
+  const { supabase, user } = await authenticate(request, env, id, 'token_creation');
+  const payload = await parseJson(request, { code: 'INVALID_ARGUMENT', stage: 'token_creation', requestId: id });
+  const mode = normalizeMode(payload?.mode);
+  const apiKey = getGeminiApiKey(env);
+  if (!apiKey) throw new ApiError('Gemini Live is not configured yet.', 503, null, { code: 'GEMINI_NOT_CONFIGURED', stage: 'token_creation', requestId: id });
+
+  await enforceRateLimit(supabase, {
+    bucket: 'live-token', userId: user.id, windowSeconds: LIVE_TOKEN_RATE_LIMIT_WINDOW_SECONDS, limit: LIVE_TOKEN_RATE_LIMIT_MAX_REQUESTS,
+  }, 'Too many voice starts. Please wait a few minutes and try again.', id, 'rate_limit');
+
+  const model = getLiveModel(env);
+  let reservation;
+  try {
+    reservation = await reserveVoiceUsage(supabase, { userId: user.id, model });
+  } catch (error) {
+    if (String(error?.message || '').includes('VOICE_DAILY_LIMIT')) {
+      throw new ApiError('The free voice limit is 5 sessions per day. Please try again tomorrow.', 429, 3600, { code: 'VOICE_LIMIT_REACHED', stage: 'rate_limit', requestId: id });
+    }
+    throw error;
   }
 
-  return 'You are Argue AI in Argue mode: a witty, rigorous debate partner. Keep every reply to 1 to 3 short sentences and no more than 55 words. Use small, plain words for maximum punch. Open with the strongest challenge, add one concrete twist or tradeoff, and end with one crisp question only when it moves the debate forward. Add a clever, good-natured joke or playful turn when it fits; never force humor, mock the user, or target sensitive groups. No fluff, headings, long setup, or repeated claims. Stay fair, accurate, and intellectually honest. Do not invent sources or claim to have current web data.';
+  try {
+    const tokenResponse = await fetchWithTimeout(GEMINI_AUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'x-goog-api-key': apiKey, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        uses: 1,
+        expireTime: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+        newSessionExpireTime: new Date(Date.now() + 60 * 1000).toISOString(),
+        liveConnectConstraints: buildLiveTokenConstraints(env, mode),
+      }),
+    }, LIVE_TOKEN_TIMEOUT_MS, request.signal);
+
+    if (!tokenResponse.ok) {
+      const upstream = await tokenResponse.json().catch(() => null);
+      console.error('Gemini Live token provisioning failed', { requestId: id, status: tokenResponse.status, message: safeUpstreamMessage(upstream?.error?.message) });
+      const code = tokenResponse.status === 429 ? 'GEMINI_QUOTA_EXHAUSTED' : 'GEMINI_UPSTREAM_UNAVAILABLE';
+      throw new ApiError(tokenResponse.status === 429 ? 'Gemini Live quota is temporarily exhausted.' : 'Gemini Live is temporarily unavailable.', tokenResponse.status === 429 ? 429 : 502, tokenResponse.status === 429 ? 60 : null, { code, stage: 'token_creation', requestId: id });
+    }
+    const tokenData = await tokenResponse.json().catch(() => null);
+    if (!tokenData?.name) throw new ApiError('Gemini Live returned an invalid session token.', 502, null, { code: 'GEMINI_TOKEN_REQUEST_REJECTED', stage: 'token_creation', requestId: id });
+    await writeUsageLog(supabase, { user_id: user.id, endpoint: '/api/live/token', provider: 'gemini', model, status_code: 200, latency_ms: Date.now() - startedAt, request_id: id });
+    return json({
+      token: tokenData.name,
+      model,
+      voice: getLiveVoice(env),
+      apiVersion: GEMINI_LIVE_API_VERSION,
+      expiresAt: tokenData.expireTime || reservation.expires_at || null,
+      reservationId: reservation.reservation_id,
+      mode: displayMode(mode),
+    });
+  } catch (error) {
+    await finishVoiceUsage(supabase, { userId: user.id, reservationId: reservation.reservation_id, durationSeconds: 0 }).catch(() => {});
+    throw error;
+  }
+}
+
+export async function handleLiveRelease(request, env) {
+  const id = requestId(request);
+  const { supabase, user } = await authenticate(request, env, id, 'voice_release');
+  const payload = await parseJson(request, { code: 'INVALID_ARGUMENT', stage: 'voice_release', requestId: id });
+  if (typeof payload?.reservationId !== 'string' || !payload.reservationId) throw new ApiError('A voice reservation is required.', 400, null, { code: 'INVALID_ARGUMENT', stage: 'voice_release', requestId: id });
+  await finishVoiceUsage(supabase, { userId: user.id, reservationId: payload.reservationId, durationSeconds: Number(payload.durationSeconds) || 0 });
+  return json({ ok: true });
 }
 
 export async function handleChat(request, env) {
-  if (contentLengthExceeds(request, MAX_CHAT_BODY_BYTES)) {
-    throw new ApiError('That argument history is too large. Start a new conversation or shorten it.', 413, null, { code: 'REQUEST_TOO_LARGE', stage: 'chat' });
-  }
+  const id = requestId(request);
+  const startedAt = Date.now();
+  if (contentLengthExceeds(request, MAX_CHAT_BODY_BYTES)) throw new ApiError('That argument is too large. Start a new conversation or shorten it.', 413, null, { code: 'REQUEST_TOO_LARGE', stage: 'chat', requestId: id });
+  const { supabase, user } = await authenticate(request, env, id, 'chat');
+  const payload = await parseJson(request, { code: 'INVALID_ARGUMENT', stage: 'chat', requestId: id });
+  const input = getMessageContent(payload?.input);
+  if (!input || input.length > MAX_CHAT_INPUT_CHARS) throw new ApiError(`Your argument must be between 1 and ${MAX_CHAT_INPUT_CHARS} characters.`, 400, null, { code: 'INVALID_ARGUMENT', stage: 'chat', requestId: id });
+  const conversation = await assertOwnedConversation(supabase, user.id, payload?.conversationId, id);
+  const mode = normalizeMode(conversation.mode);
+  await enforceRateLimit(supabase, { bucket: 'chat', userId: user.id, windowSeconds: CHAT_RATE_LIMIT_WINDOW_SECONDS, limit: CHAT_RATE_LIMIT_MAX_REQUESTS }, 'Too many messages. Please wait a moment and try again.', id, 'rate_limit');
 
-  let payload;
-  try {
-    payload = await request.json();
-  } catch {
-    throw new ApiError('Please send a valid argument.', 400, null, { code: 'INVALID_ARGUMENT', stage: 'chat' });
-  }
+  const { data: savedUserMessage, error: saveUserError } = await supabase
+    .from('messages')
+    .insert({ conversation_id: conversation.id, user_id: user.id, role: 'user', source: 'text', content: input })
+    .select('id,role,source,content,model,created_at')
+    .single();
+  if (saveUserError) throw saveUserError;
 
-  const input = typeof payload?.input === 'string' ? payload.input.trim() : '';
-  if (!input || input.length > MAX_CHAT_INPUT_CHARS) {
-    throw new ApiError(`Your argument must be between 1 and ${MAX_CHAT_INPUT_CHARS} characters.`, 400, null, { code: 'INVALID_ARGUMENT', stage: 'chat' });
-  }
-
-  const history = normalizeMessages(payload.messages);
-  const lastMessage = history.at(-1);
-  const model = environmentValue(env, 'GROQ_REASONING_MODEL') || DEFAULT_REASONING_MODEL;
-  const isGptOss = model === 'openai/gpt-oss-20b' || model === 'openai/gpt-oss-120b';
+  const { data: history, error: historyError } = await supabase
+    .from('messages')
+    .select('role,content')
+    .eq('conversation_id', conversation.id)
+    .order('created_at', { ascending: false })
+    .limit(8);
+  if (historyError) throw historyError;
+  const model = envValue(env, 'GROQ_REASONING_MODEL') || DEFAULT_REASONING_MODEL;
+  const fallbackModel = envValue(env, 'GROQ_FALLBACK_MODEL') || DEFAULT_FALLBACK_MODEL;
   const messages = [
-    { role: 'system', content: systemPrompt(payload.mode) },
-    ...history,
-    ...(lastMessage?.role === 'user' && lastMessage.content === input ? [] : [{ role: 'user', content: input }]),
+    { role: 'system', content: systemPrompt(mode) },
+    ...(history || []).reverse().map((message) => ({ role: message.role, content: message.content })),
   ];
 
-  const data = await groqJson('/chat/completions', {
-    model,
-    messages,
-    temperature: payload.mode === 'Brainstorm' ? 0.35 : 0.6,
-    max_completion_tokens: 256,
-    ...(isGptOss ? { reasoning_effort: 'low' } : {}),
-  }, env);
+  let data;
+  let usedModel = model;
+  try {
+    data = await groqCompletion({ model, messages, env, signal: request.signal });
+  } catch (error) {
+    if (!fallbackModel || fallbackModel === model || error.code === 'GROQ_QUOTA_EXHAUSTED') throw error;
+    usedModel = fallbackModel;
+    data = await groqCompletion({ model: fallbackModel, messages, env, signal: request.signal });
+  }
+  const reply = getMessageContent(data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text);
+  if (!reply) throw new ApiError('The AI returned an empty response.', 502, null, { code: 'EMPTY_AI_RESPONSE', stage: 'chat', requestId: id });
 
-  const reply = getMessageContent(data?.choices?.[0]?.message) || data?.choices?.[0]?.text?.trim();
-  if (!reply) throw new ApiError('The AI returned an empty response.', 502, null, { code: 'EMPTY_AI_RESPONSE', stage: 'chat' });
-
-  return json({ reply });
+  const { data: savedAssistantMessage, error: saveAssistantError } = await supabase
+    .from('messages')
+    .insert({ conversation_id: conversation.id, user_id: user.id, role: 'assistant', source: 'text', content: reply, model: usedModel })
+    .select('id,role,source,content,model,created_at')
+    .single();
+  if (saveAssistantError) throw saveAssistantError;
+  await supabase.from('conversations').update({ title: input.slice(0, 80) }).eq('id', conversation.id).eq('user_id', user.id);
+  await writeUsageLog(supabase, { user_id: user.id, endpoint: '/api/chat', provider: 'groq', model: usedModel, status_code: 200, latency_ms: Date.now() - startedAt, request_id: id });
+  return json({ reply, conversationId: conversation.id, userMessage: responseMessage(savedUserMessage), assistantMessage: responseMessage(savedAssistantMessage) });
 }
 
-export function handleHealth(_request, env) {
-  const liveConfigured = Boolean(getGeminiApiKey(env));
+export async function handlePersistVoiceMessage(request, env) {
+  const id = requestId(request);
+  if (contentLengthExceeds(request, MAX_MESSAGE_BODY_BYTES)) throw new ApiError('That transcript is too large.', 413, null, { code: 'REQUEST_TOO_LARGE', stage: 'messages', requestId: id });
+  const { supabase, user } = await authenticate(request, env, id, 'messages');
+  const payload = await parseJson(request, { code: 'INVALID_ARGUMENT', stage: 'messages', requestId: id });
+  const content = getMessageContent(payload?.content);
+  const role = payload?.role;
+  if (!content || !['user', 'assistant'].includes(role)) throw new ApiError('A valid confirmed voice message is required.', 400, null, { code: 'INVALID_ARGUMENT', stage: 'messages', requestId: id });
+  const conversation = await assertOwnedConversation(supabase, user.id, payload?.conversationId, id);
+  const { data, error } = await supabase
+    .from('messages')
+    .insert({ conversation_id: conversation.id, user_id: user.id, role, source: 'voice', content, model: role === 'assistant' ? getLiveModel(env) : null })
+    .select('id,role,source,content,model,created_at')
+    .single();
+  if (error) throw error;
+  return json({ message: responseMessage(data) });
+}
+
+export async function handleDeleteAccount(request, env) {
+  const id = requestId(request);
+  const { supabase, user } = await authenticate(request, env, id, 'account');
+  const { error } = await supabase.auth.admin.deleteUser(user.id);
+  if (error) throw error;
+  return json({ ok: true });
+}
+
+export function handleStatus(_request, env) {
   return json({
-    status: 'ok',
-    environment: environmentValue(env, 'VERCEL_ENV') || environmentValue(env, 'NODE_ENV') || 'development',
-    liveConfigured,
-    liveStatus: liveConfigured ? 'credentials-present-not-verified' : 'credentials-missing',
-    textConfigured: Boolean(environmentValue(env, 'GROQ_API_KEY')),
+    supabaseConfigured: Boolean((envValue(env, 'SUPABASE_URL') || envValue(env, 'VITE_SUPABASE_URL')) && envValue(env, 'SUPABASE_SERVICE_ROLE_KEY')),
+    chatReady: Boolean(envValue(env, 'GROQ_API_KEY')),
+    liveReady: Boolean(getGeminiApiKey(env)),
     liveModel: getLiveModel(env),
-    liveVoice: getLiveVoice(env),
-    apiVersion: GEMINI_LIVE_API_VERSION,
-    buildCommit: environmentValue(env, 'VERCEL_GIT_COMMIT_SHA') || environmentValue(env, 'GIT_COMMIT_SHA') || 'local',
+    buildCommit: envValue(env, 'VERCEL_GIT_COMMIT_SHA') || envValue(env, 'GIT_COMMIT_SHA') || 'local',
   });
 }
 
+export const handleHealth = handleStatus;
+
 export async function handleApi(request, env, url = new URL(request.url)) {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204 });
-  if (url.pathname === '/api/health' && request.method === 'GET') return handleHealth(request, env);
-  if (url.pathname === '/api/live-token' && request.method === 'POST') return handleLiveToken(request, env);
+  if ((url.pathname === '/api/status' || url.pathname === '/api/health') && request.method === 'GET') return handleStatus(request, env);
+  if ((url.pathname === '/api/live/token' || url.pathname === '/api/live-token') && request.method === 'POST') return handleLiveToken(request, env);
+  if (url.pathname === '/api/live/release' && request.method === 'POST') return handleLiveRelease(request, env);
   if (url.pathname === '/api/chat' && request.method === 'POST') return handleChat(request, env);
+  if (url.pathname === '/api/messages' && request.method === 'POST') return handlePersistVoiceMessage(request, env);
+  if (url.pathname === '/api/account' && request.method === 'DELETE') return handleDeleteAccount(request, env);
   return json({ error: 'API route not found.', code: 'NOT_FOUND', stage: 'routing', requestId: requestId(request) }, 404);
 }
 
-export function __resetRateLimitsForTests() {
-  liveTokenRateLimits.clear();
-  liveSessionRateLimits.clear();
-}
+export function __resetRateLimitsForTests() {}

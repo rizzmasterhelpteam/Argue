@@ -30,6 +30,14 @@ import {
   Waveform,
   X,
 } from '@phosphor-icons/react';
+import { apiJson } from './lib/apiClient';
+import { supabase } from './lib/supabase';
+import {
+  createConversation,
+  getMessages,
+  listConversations,
+  messageForUi,
+} from './services/conversationService';
 
 const SETTINGS_KEY = 'argue-ai-settings';
 const SETTINGS_VERSION = 2;
@@ -156,36 +164,13 @@ voiceStatusCopy.thinking = 'Thinking - tap ARGUE to stop';
 voiceStatusCopy.generating = 'Generating the voice response - tap ARGUE to stop';
 voiceStatusCopy.speaking = 'Speaking - tap ARGUE to stop';
 
-async function requestJson(path, options) {
-  const response = await fetch(path, options);
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || 'The AI service is unavailable right now.');
-  return data;
-}
-
 async function requestLiveToken(mode, signal) {
   voiceDebug('token requested', { mode });
-  const response = await fetch('/api/live-token', {
+  const data = await apiJson('/api/live/token', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ mode }),
     signal,
   });
-  voiceDebug('token response', {
-    status: response.status,
-    contentType: response.headers?.get?.('content-type') || 'unknown',
-  });
-
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    const error = new Error(data.error || 'Gemini Live is unavailable right now.');
-    error.code = data.code;
-    error.stage = data.stage;
-    error.requestId = data.requestId;
-    throw error;
-  }
-
-  const data = await response.json().catch(() => null);
   if (!data?.token || !data?.model) throw new Error('Gemini Live returned an invalid session token.');
   voiceDebug('token received', { model: data.model, apiVersion: data.apiVersion || LIVE_API_VERSION });
   return data;
@@ -386,7 +371,14 @@ function SplashScreen() {
   );
 }
 
-export function App() {
+function messageFromApi(message) {
+  return messageForUi({
+    ...message,
+    created_at: message.createdAt || message.created_at || new Date().toISOString(),
+  });
+}
+
+export function App({ user = null, onLogout, onDeleteAccount }) {
   const [showSplash, setShowSplash] = useState(() => import.meta.env.MODE !== 'test');
   const [mode, setMode] = useState('Argue');
   const [inputMode, setInputMode] = useState('voice');
@@ -396,7 +388,10 @@ export function App() {
   const [lastVoiceError, setLastVoiceError] = useState('');
   const [hasPendingAudio, setHasPendingAudio] = useState(false);
   const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
-  const [messages, setMessages] = useState(initialMessages);
+  const [messages, setMessages] = useState(() => (user ? [] : initialMessages));
+  const [conversations, setConversations] = useState(() => (user ? [] : historyItems));
+  const [activeConversationId, setActiveConversationId] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(Boolean(user));
   const [draft, setDraft] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState('voice');
@@ -428,6 +423,8 @@ export function App() {
   const liveOutputTranscript = useRef('');
   const liveUserMessageId = useRef(null);
   const liveAssistantMessageId = useRef(null);
+  const liveReservationId = useRef(null);
+  const liveReservationStartedAt = useRef(0);
   const speechUtterance = useRef(null);
   const voiceStatusTimer = useRef(null);
   const copyTimer = useRef(null);
@@ -446,6 +443,50 @@ export function App() {
     setNotice(message);
     noticeTimer.current = window.setTimeout(() => setNotice(''), 2600);
   }, []);
+
+  const refreshConversations = useCallback(async () => {
+    if (!user) return;
+    setHistoryLoading(true);
+    try {
+      setConversations(await listConversations());
+    } catch (error) {
+      showNotice(error.message || 'Conversation history could not be loaded.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [showNotice, user]);
+
+  useEffect(() => {
+    void refreshConversations();
+  }, [refreshConversations]);
+
+  useEffect(() => {
+    if (!user || !supabase) return undefined;
+    let active = true;
+    supabase.from('user_preferences').select('*').eq('user_id', user.id).maybeSingle().then(({ data, error }) => {
+      if (!active || error || !data) return;
+      setMode(data.default_mode === 'brainstorm' ? 'Brainstorm' : 'Argue');
+      setInputMode(data.input_mode === 'text' ? 'text' : 'voice');
+      setSettings((current) => ({
+        ...current,
+        autoPlayVoice: data.autoplay_voice,
+        selectedVoice: data.replay_voice || current.selectedVoice,
+        hapticsEnabled: data.haptics_enabled,
+        compactTranscript: data.compact_transcript,
+        reducedMotion: data.reduced_motion,
+      }));
+    });
+    return () => { active = false; };
+  }, [user]);
+
+  const ensureActiveConversation = useCallback(async (sessionMode) => {
+    if (!user) return 'demo-conversation';
+    if (activeConversationId) return activeConversationId;
+    const conversation = await createConversation(sessionMode);
+    setActiveConversationId(conversation.id);
+    setConversations((current) => [conversation, ...current]);
+    return conversation.id;
+  }, [activeConversationId, user]);
 
   const haptic = useCallback(() => {
     if (settings.hapticsEnabled && navigator.vibrate) navigator.vibrate(10);
@@ -564,13 +605,25 @@ export function App() {
   }, []);
 
   const finalizeLiveTurn = useCallback(() => {
-    upsertLiveMessage('user', liveInputTranscript.current);
-    upsertLiveMessage('assistant', liveOutputTranscript.current);
+    const confirmedMessages = [
+      { role: 'user', content: liveInputTranscript.current.trim() },
+      { role: 'assistant', content: liveOutputTranscript.current.trim() },
+    ].filter((message) => message.content);
+    for (const message of confirmedMessages) upsertLiveMessage(message.role, message.content);
+    if (user && confirmedMessages.length) {
+      void ensureActiveConversation(mode)
+        .then((conversationId) => Promise.all(confirmedMessages.map((message) => apiJson('/api/messages', {
+          method: 'POST',
+          body: JSON.stringify({ conversationId, role: message.role, content: message.content }),
+        }))))
+        .then(() => refreshConversations())
+        .catch((error) => showNotice(error.message || 'Voice transcript could not be saved.'));
+    }
     liveInputTranscript.current = '';
     liveOutputTranscript.current = '';
     liveUserMessageId.current = null;
     liveAssistantMessageId.current = null;
-  }, [upsertLiveMessage]);
+  }, [ensureActiveConversation, mode, refreshConversations, showNotice, upsertLiveMessage, user]);
 
   const storeLiveAudio = useCallback((base64Audio, mimeType) => {
     const currentSize = livePendingAudio.current.reduce((total, item) => total + item.base64Audio.length, 0);
@@ -747,6 +800,16 @@ export function App() {
     }
     liveTokenAbort.current?.abort();
     liveTokenAbort.current = null;
+    const reservationId = liveReservationId.current;
+    const reservationDuration = liveReservationStartedAt.current ? Math.round((Date.now() - liveReservationStartedAt.current) / 1000) : 0;
+    liveReservationId.current = null;
+    liveReservationStartedAt.current = 0;
+    if (user && reservationId) {
+      void apiJson('/api/live/release', {
+        method: 'POST',
+        body: JSON.stringify({ reservationId, durationSeconds: reservationDuration }),
+      }).catch(() => {});
+    }
     const socket = liveSocket.current;
     liveSocket.current = null;
     if (socket && (socket.readyState === window.WebSocket.OPEN || socket.readyState === window.WebSocket.CONNECTING)) socket.close(1000, 'Session stopped');
@@ -762,7 +825,7 @@ export function App() {
     setPlayingMessageId(null);
     setVoicePhase('stopped');
     if (announce) showNotice('Voice session stopped.');
-  }, [clearLiveTimeouts, closeLiveOutputContext, showNotice, stopLiveMicrophone]);
+  }, [clearLiveTimeouts, closeLiveOutputContext, showNotice, stopLiveMicrophone, user]);
 
   stopLiveSessionRef.current = stopLiveSession;
 
@@ -897,7 +960,23 @@ export function App() {
     } catch {
       // The app remains usable when browser storage is unavailable.
     }
-  }, [settings]);
+    if (!user || !supabase) return;
+    const timer = window.setTimeout(() => {
+      supabase.from('user_preferences').upsert({
+        user_id: user.id,
+        default_mode: mode === 'Brainstorm' ? 'brainstorm' : 'argue',
+        input_mode: inputMode,
+        replay_voice: settings.selectedVoice,
+        autoplay_voice: settings.autoPlayVoice,
+        haptics_enabled: settings.hapticsEnabled,
+        compact_transcript: settings.compactTranscript,
+        reduced_motion: settings.reducedMotion,
+      }, { onConflict: 'user_id' }).then(({ error }) => {
+        if (error) voiceDebug('preferences sync failed', { code: error.code });
+      });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [inputMode, mode, settings, user]);
 
   useEffect(() => () => {
     stopLiveSession(false);
@@ -933,6 +1012,36 @@ export function App() {
     };
   }, [stopConversation]);
 
+  useEffect(() => {
+    let active = true;
+    const handles = [];
+    void Promise.all([import('@capacitor/core'), import('@capacitor/app'), import('@capacitor/network')]).then(async ([core, app, network]) => {
+      if (!active || !core.Capacitor.isNativePlatform()) return;
+      handles.push(await app.App.addListener('appStateChange', ({ isActive }) => {
+        if (!isActive) {
+          stopConversation(false);
+          setInputMode('text');
+        }
+      }));
+      handles.push(await app.App.addListener('backButton', () => {
+        if (!['idle', 'stopped'].includes(voicePhase)) {
+          stopConversation(false);
+          setInputMode('text');
+        }
+      }));
+      handles.push(await network.Network.addListener('networkStatusChange', ({ connected }) => {
+        if (!connected) {
+          stopConversation(false);
+          showNotice('You are offline. Voice has been stopped safely.');
+        }
+      }));
+    }).catch(() => {});
+    return () => {
+      active = false;
+      handles.forEach((handle) => handle?.remove?.());
+    };
+  }, [showNotice, stopConversation, voicePhase]);
+
   const startVoiceSession = async () => {
     if (liveStartPromise.current) return;
     if (liveSocket.current || !['idle', 'stopped', 'error'].includes(voicePhase)) {
@@ -949,6 +1058,13 @@ export function App() {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (typeof AudioContextClass !== 'function') {
       showNotice('Live audio is not supported in this browser.');
+      return;
+    }
+
+    try {
+      await ensureActiveConversation(mode);
+    } catch (error) {
+      showNotice(error.message || 'A conversation could not be created.');
       return;
     }
 
@@ -1019,6 +1135,8 @@ export function App() {
           stream.getTracks().forEach((mediaTrack) => mediaTrack.stop());
           return;
         }
+        liveReservationId.current = token.reservationId || null;
+        liveReservationStartedAt.current = Date.now();
 
         setVoicePhase('opening-socket');
         const apiVersion = token.apiVersion || LIVE_API_VERSION;
@@ -1047,7 +1165,7 @@ export function App() {
                 },
                 inputAudioTranscription: {},
                 outputAudioTranscription: {},
-                systemInstruction: { parts: [{ text: liveSystemInstruction(mode) }] },
+                sessionResumption: {},
                 realtimeInputConfig: {
                   automaticActivityDetection: {
                     disabled: false,
@@ -1140,19 +1258,25 @@ export function App() {
 
     haptic();
     const sessionMode = mode;
-    const userMessage = { id: createId('text-user'), role: 'user', time: getCurrentTime(), text: value };
-    const nextMessages = [...messages, userMessage];
-    setMessages(nextMessages);
     setDraft('');
     setVoicePhase('thinking');
 
     try {
-      const response = await requestJson('/api/chat', {
+      const conversationId = await ensureActiveConversation(sessionMode);
+      if (!user) {
+        const userMessage = { id: createId('text-user'), role: 'user', time: getCurrentTime(), text: value };
+        setMessages((current) => [...current, userMessage]);
+      }
+      const response = await apiJson('/api/chat', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ mode: sessionMode, input: value, messages: nextMessages }),
+        body: JSON.stringify({ conversationId, input: value }),
       });
-      setMessages((current) => [...current, { id: createId('text-ai'), role: 'assistant', time: getCurrentTime(), text: response.reply }]);
+      if (response.userMessage && response.assistantMessage) {
+        setMessages((current) => [...current, messageFromApi(response.userMessage), messageFromApi(response.assistantMessage)]);
+        await refreshConversations();
+      } else {
+        setMessages((current) => [...current, { id: createId('text-ai'), role: 'assistant', time: getCurrentTime(), text: response.reply }]);
+      }
     } catch (error) {
       showNotice(error.message);
     } finally {
@@ -1254,17 +1378,30 @@ export function App() {
     setActiveNav(destination);
   };
 
-  const openConversation = (conversation) => {
+  const openConversation = async (conversation) => {
     stopConversation(false);
     setMode(conversation.mode);
     setInputMode('text');
-    setMessages(conversation.messages);
+    if (user) {
+      try {
+        setHistoryLoading(true);
+        setMessages(await getMessages(conversation.id));
+        setActiveConversationId(conversation.id);
+      } catch (error) {
+        showNotice(error.message || 'That conversation could not be opened.');
+      } finally {
+        setHistoryLoading(false);
+      }
+    } else {
+      setMessages(conversation.messages || []);
+    }
     setActiveNav('Argue');
   };
 
   const startNewConversation = () => {
     stopConversation(false);
     setMessages([]);
+    setActiveConversationId(null);
     setDraft('');
     setActiveNav('Argue');
   };
@@ -1315,15 +1452,19 @@ export function App() {
                 )}
                 {activeNav === 'History' && (
                   <HistoryScreen
-                    conversations={historyItems}
+                    conversations={conversations}
+                    loading={historyLoading}
                     onOpenConversation={openConversation}
                     onStartNew={startNewConversation}
                   />
                 )}
                 {activeNav === 'Profile' && (
                   <ProfileScreen
+                    user={user}
                     onOpenSettings={openSettings}
                     onAction={showNotice}
+                    onLogout={onLogout}
+                    onDeleteAccount={onDeleteAccount}
                   />
                 )}
               </div>
@@ -1614,7 +1755,7 @@ function DesktopSidebar({ activeNav, onNavigate }) {
   );
 }
 
-function HistoryScreen({ conversations, onOpenConversation, onStartNew }) {
+function HistoryScreen({ conversations, loading, onOpenConversation, onStartNew }) {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('All');
   const [compact, setCompact] = useState(false);
@@ -1643,8 +1784,8 @@ function HistoryScreen({ conversations, onOpenConversation, onStartNew }) {
         ))}
       </div>
       <div className={compact ? 'history-list compact' : 'history-list'}>
-        {filteredConversations.length ? filteredConversations.map((item) => (
-          <button className="history-item" type="button" key={item.title} onClick={() => onOpenConversation(item)}>
+        {loading ? <div className="history-empty">Loading conversations...</div> : filteredConversations.length ? filteredConversations.map((item) => (
+          <button className="history-item" type="button" key={item.id || item.title} onClick={() => onOpenConversation(item)}>
             <div className="history-icon" aria-hidden="true">{item.mode === 'Argue' ? <ChatCircleDots size={20} /> : <Lightbulb size={20} />}</div>
             <div className="history-copy">
               <div className="history-title"><strong>{item.title}</strong><span>{item.date}</span></div>
@@ -1661,7 +1802,7 @@ function HistoryScreen({ conversations, onOpenConversation, onStartNew }) {
   );
 }
 
-function ProfileScreen({ onOpenSettings, onAction }) {
+function ProfileScreen({ user, onOpenSettings, onAction, onLogout, onDeleteAccount }) {
   return (
     <div className="secondary-screen profile-screen">
       <header className="secondary-header">
@@ -1670,7 +1811,7 @@ function ProfileScreen({ onOpenSettings, onAction }) {
       </header>
       <section className="profile-card">
         <div className="profile-avatar" aria-hidden="true"><UserCircle size={49} weight="fill" /></div>
-        <div><strong>Alex Morgan</strong><span>Guest account</span></div>
+        <div><strong>{user?.user_metadata?.full_name || user?.email || 'Guest account'}</strong><span>{user ? 'Your Argue AI account' : 'Guest account'}</span></div>
         <button type="button" aria-label="Edit profile" onClick={() => onAction('Profile editing is not connected in this prototype.')}><SlidersHorizontal size={19} /></button>
       </section>
       <div className="usage-card"><div><span className="eyebrow">THIS MONTH</span><strong>12 / 20</strong><p>conversations used</p></div><div className="usage-ring"><span>60%</span></div></div>
@@ -1679,7 +1820,14 @@ function ProfileScreen({ onOpenSettings, onAction }) {
         <button type="button" onClick={() => onOpenSettings('app')}><GearSix size={21} /><span>App preferences</span><CaretRight size={17} /></button>
         <button type="button" onClick={() => onAction('Support: hello@argue.ai')}><SpeakerHigh size={21} /><span>Feedback & support</span><CaretRight size={17} /></button>
       </div>
-      <button className="guest-cta" type="button" onClick={() => onAction('Account creation is not connected in this prototype.')}>Create an account <ArrowUp size={18} /></button>
+      {user ? (
+        <div className="profile-auth-actions">
+          <button className="guest-cta" type="button" onClick={() => onLogout?.().catch((error) => onAction(error.message))}>Log out</button>
+          <button className="account-delete" type="button" onClick={() => {
+            if (window.confirm('Delete your Argue AI account and its conversations? This cannot be undone.')) onDeleteAccount?.().catch((error) => onAction(error.message));
+          }}>Delete account</button>
+        </div>
+      ) : <button className="guest-cta" type="button" onClick={() => onAction('Sign in is required in production.')}>Create an account <ArrowUp size={18} /></button>}
     </div>
   );
 }

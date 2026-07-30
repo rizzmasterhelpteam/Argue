@@ -40,14 +40,10 @@ describe('Vercel route entrypoints', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toContain('application/json');
-    expect(JSON.parse(res.body.toString())).toMatchObject({
-      status: 'ok',
-      textConfigured: true,
-      liveConfigured: true,
-    });
+    expect(JSON.parse(res.body.toString())).toMatchObject({ chatReady: true, liveReady: true });
   });
 
-  it('serves /api/live-token without proxying audio traffic', async () => {
+  it('rejects unauthenticated Live token requests without proxying audio traffic', async () => {
     vi.stubEnv('GEMINI_API_KEY', 'server-only');
     vi.stubEnv('GEMINI_LIVE_MODEL', 'gemini-3.1-flash-live-preview');
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ name: 'authTokens/route-test' }), { status: 200 })));
@@ -58,13 +54,9 @@ describe('Vercel route entrypoints', () => {
       res,
     );
 
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(401);
     expect(res.headers['content-type']).toContain('application/json');
-    expect(JSON.parse(res.body.toString())).toMatchObject({
-      token: 'authTokens/route-test',
-      model: 'gemini-3.1-flash-live-preview',
-    });
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch.mock.calls[0][0]).toContain('generativelanguage.googleapis.com');
+    expect(JSON.parse(res.body.toString())).toMatchObject({ code: 'AUTH_REQUIRED' });
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
