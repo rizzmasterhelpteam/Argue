@@ -1542,7 +1542,7 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, voiceP
 
       {inputMode === 'voice' && (
         <section className={isBusy ? 'voice-zone busy' : 'voice-zone'} aria-label="Voice conversation control">
-          <div className="desktop-waveform-backdrop" aria-hidden="true" />
+          <SignalWaveBackdrop state={activeState} />
           <button className="voice-orbit" type="button" onClick={startVoiceSession} aria-label={isBusy ? 'Stop voice session' : voicePhase === 'error' ? 'Retry voice session' : 'Start voice session'}>
             <span className="voice-core">
               <Waveform className="core-waveform" size={45} weight="bold" />
@@ -1627,6 +1627,46 @@ function FeatureCard({ icon, title, copy }) {
       <span className="desktop-feature-icon" aria-hidden="true">{icon}</span>
       <div><strong>{title}</strong><span>{copy}</span></div>
     </article>
+  );
+}
+
+function SignalWaveBackdrop({ state }) {
+  const paths = [
+    'M0 117 C96 84 174 159 281 121 S460 82 600 120 S827 157 918 120 S1094 80 1200 117',
+    'M0 142 C112 107 196 184 312 142 S484 105 600 144 S798 182 892 143 S1091 105 1200 142',
+    'M0 95 C127 134 217 61 331 104 S487 150 600 96 S777 59 879 102 S1067 137 1200 96',
+    'M0 164 C91 123 188 194 300 161 S481 129 600 165 S812 197 915 160 S1087 126 1200 165',
+    'M0 71 C117 110 212 43 326 79 S483 119 600 72 S790 40 900 79 S1089 111 1200 72',
+  ];
+
+  return (
+    <svg className="signal-wave-backdrop" data-state={state} viewBox="0 0 1200 240" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+      <defs>
+        <radialGradient id="signal-center-glow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#ff761b" stopOpacity=".34" />
+          <stop offset="38%" stopColor="#ff5d00" stopOpacity=".12" />
+          <stop offset="100%" stopColor="#ff5d00" stopOpacity="0" />
+        </radialGradient>
+        <linearGradient id="signal-trail" x1="0%" x2="100%">
+          <stop offset="0%" stopColor="#ff6b12" stopOpacity="0" />
+          <stop offset="21%" stopColor="#ff7a21" stopOpacity=".28" />
+          <stop offset="50%" stopColor="#ffb36b" stopOpacity=".95" />
+          <stop offset="79%" stopColor="#ff7a21" stopOpacity=".28" />
+          <stop offset="100%" stopColor="#ff6b12" stopOpacity="0" />
+        </linearGradient>
+        <filter id="signal-soft-glow" x="-20%" y="-80%" width="140%" height="260%">
+          <feGaussianBlur stdDeviation="3" result="blur" />
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+      </defs>
+      <ellipse className="signal-center-glow" cx="600" cy="120" rx="278" ry="104" fill="url(#signal-center-glow)" />
+      <g className="signal-wave-trails" fill="none" stroke="url(#signal-trail)" strokeLinecap="round">
+        {paths.map((d, index) => <path className={`signal-wave signal-wave-${index + 1}`} d={d} key={d} />)}
+      </g>
+      <g className="signal-wave-shimmer" fill="none" strokeLinecap="round">
+        {paths.slice(0, 3).map((d, index) => <path d={d} key={d} className={`signal-shimmer signal-shimmer-${index + 1}`} />)}
+      </g>
+    </svg>
   );
 }
 

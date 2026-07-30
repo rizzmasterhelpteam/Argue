@@ -186,6 +186,9 @@ describe('Argue AI', () => {
   it('connects voice to Gemini Live and streams live turns', async () => {
     render(<App />);
 
+    expect(document.querySelector('.signal-wave-backdrop[data-state="idle"]')).not.toBeNull();
+    expect(document.querySelectorAll('.signal-wave').length).toBe(5);
+
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Start voice session' }));
       await flushPromises();
