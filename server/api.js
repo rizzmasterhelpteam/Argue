@@ -244,7 +244,7 @@ export async function handleLiveToken(request, env) {
       headers: { 'x-goog-api-key': apiKey, 'content-type': 'application/json' },
       body: JSON.stringify({
         uses: 1,
-        expireTime: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+        expireTime: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
         newSessionExpireTime: new Date(Date.now() + 60 * 1000).toISOString(),
         bidiGenerateContentSetup: buildLiveTokenConstraints(env, mode),
       }),

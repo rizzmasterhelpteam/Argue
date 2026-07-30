@@ -45,8 +45,6 @@ const VOICE_PLAYBACK_RATE = 1.5;
 const LIVE_INPUT_SAMPLE_RATE = 16000;
 const LIVE_OUTPUT_SAMPLE_RATE = 24000;
 const LIVE_API_VERSION = 'v1beta';
-const LIVE_SESSION_MAX_MS = 60 * 1000;
-const LIVE_SILENCE_TIMEOUT_MS = 15 * 1000;
 const LIVE_SPEECH_RMS_THRESHOLD = 0.02;
 const LIVE_TOKEN_TIMEOUT_MS = 8 * 1000;
 const LIVE_SOCKET_TIMEOUT_MS = 8 * 1000;
@@ -408,8 +406,6 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
   const liveMicSource = useRef(null);
   const liveMicProcessor = useRef(null);
   const liveMicSilence = useRef(null);
-  const liveMicInactivityTimer = useRef(null);
-  const liveSessionTimer = useRef(null);
   const liveStartPromise = useRef(null);
   const liveTimeouts = useRef(new Map());
   const liveAudioMetrics = useRef({ chunksSent: 0, bytesSent: 0, chunksReceived: 0, bytesReceived: 0, rms: 0, speechDetected: false });
@@ -562,10 +558,6 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
   }, [clearLiveAudioQueue]);
 
   const stopLiveMicrophone = useCallback(() => {
-    if (liveMicInactivityTimer.current) {
-      window.clearTimeout(liveMicInactivityTimer.current);
-      liveMicInactivityTimer.current = null;
-    }
     const processor = liveMicProcessor.current;
     if (processor) {
       processor.onaudioprocess = null;
@@ -794,10 +786,6 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
     liveSessionId.current += 1;
     clearLiveTimeouts();
     liveSetupReady.current = false;
-    if (liveSessionTimer.current) {
-      window.clearTimeout(liveSessionTimer.current);
-      liveSessionTimer.current = null;
-    }
     liveTokenAbort.current?.abort();
     liveTokenAbort.current = null;
     const reservationId = liveReservationId.current;
@@ -854,15 +842,6 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
     }
     voiceDebug('microphone context', { state: context.state, trackState: track.readyState || 'live' });
 
-    const armInactivityTimeout = () => {
-      if (liveMicInactivityTimer.current) window.clearTimeout(liveMicInactivityTimer.current);
-      liveMicInactivityTimer.current = window.setTimeout(() => {
-        if (liveSessionId.current !== sessionId) return;
-        voiceDebug('inactivity timeout');
-        stopLiveSession(false);
-        showNotice('Voice session ended after a long pause.');
-      }, LIVE_SILENCE_TIMEOUT_MS);
-    };
     let firstChunkLogged = false;
     const sendSamples = (input) => {
       if (liveSessionId.current !== sessionId || socket.readyState !== window.WebSocket.OPEN) return;
@@ -872,7 +851,6 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
       const rms = Math.sqrt(energy / input.length);
       liveAudioMetrics.current.rms = rms;
       if (rms >= LIVE_SPEECH_RMS_THRESHOLD) {
-        armInactivityTimeout();
         if (!liveAudioMetrics.current.speechDetected) {
           liveAudioMetrics.current.speechDetected = true;
           clearLiveTimeout('no-audio');
@@ -941,7 +919,6 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
     liveMicSource.current = capture.source;
     liveMicProcessor.current = capture.processor;
     liveMicSilence.current = capture.silence;
-    armInactivityTimeout();
     scheduleLiveTimeout('first-chunk', LIVE_FIRST_CHUNK_TIMEOUT_MS, sessionId, () => {
       stopLiveSession(false);
       showVoiceError(new Error('The microphone did not produce audio.'), 'starting-microphone');
@@ -1078,12 +1055,6 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
       setAudioPlaybackBlocked(false);
       setLastVoiceError('');
       setVoicePhase('requesting-permission');
-      liveSessionTimer.current = window.setTimeout(() => {
-        if (liveSessionId.current !== sessionId) return;
-        voiceDebug('session timeout');
-        stopLiveSession(false);
-        showVoiceError(new Error('Free voice sessions are limited to 60 seconds.'), 'session-limit');
-      }, LIVE_SESSION_MAX_MS);
       const controller = new AbortController();
       liveTokenAbort.current = controller;
 
