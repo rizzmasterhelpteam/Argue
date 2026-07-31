@@ -1495,6 +1495,7 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, voiceP
 
   return (
     <div className={inputMode === 'voice' ? 'home-screen voice-mode' : 'home-screen text-mode'}>
+      {inputMode === 'voice' && <SignalWaveBackdrop state={activeState} />}
       <header className="top-header">
         <div className="brand-lockup" aria-label="Argue AI">
           <span>Argue</span><b>AI</b>
@@ -1538,7 +1539,6 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, voiceP
 
       {inputMode === 'voice' && (
         <section className={isBusy ? 'voice-zone busy' : 'voice-zone'} aria-label="Voice conversation control">
-          <SignalWaveBackdrop state={activeState} />
           <button className="voice-orbit" type="button" onClick={startVoiceSession} aria-label={isBusy ? 'Stop voice session' : voicePhase === 'error' ? 'Retry voice session' : 'Start voice session'}>
             <span className="voice-core">
               <Waveform className="core-waveform" size={45} weight="bold" />
