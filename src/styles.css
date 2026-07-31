@@ -915,6 +915,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .profile-metrics > div { min-height: 82px; display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 14px; border: 1px solid #2a2c2f; border-radius: 12px; background: #111314; }
 .profile-metrics strong { color: #f1f2f3; font-size: 24px; line-height: 1; letter-spacing: 0; }
 .profile-metrics span { color: #929497; font-size: 12px; }
+.usage-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; width: 100%; margin-top: 10px; }
+.usage-summary > div { display: grid; gap: 4px; padding: 14px; border: 1px solid #2a2c2f; border-radius: 12px; background: #111314; }
+.usage-summary span { color: #aeb1b5; font-size: 12px; text-transform: capitalize; }
+.usage-summary strong { color: #f1f2f3; font-size: 20px; }
+.usage-summary small { color: #777a7e; font-size: 11px; }
 .profile-section { width: 100%; margin-top: 26px; }
 .profile-section-label { display: block; margin: 0 0 8px 2px; color: #8e9093; font-size: 10px; font-weight: 700; letter-spacing: .14em; }
 .profile-screen .settings-list { margin-top: 0; border: 1px solid #2a2c2f; border-radius: 12px; overflow: hidden; background: #111314; }

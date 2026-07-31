@@ -400,6 +400,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
   const [copiedId, setCopiedId] = useState(null);
   const [playingMessageId, setPlayingMessageId] = useState(null);
   const [notice, setNotice] = useState('');
+  const [usage, setUsage] = useState(null);
   const liveSocket = useRef(null);
   const stopLiveSessionRef = useRef(null);
   const liveStream = useRef(null);
@@ -458,6 +459,13 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
   useEffect(() => {
     void refreshConversations();
   }, [refreshConversations]);
+
+  useEffect(() => {
+    if (!user) return undefined;
+    let active = true;
+    apiJson('/api/me/usage').then((data) => { if (active) setUsage(data); }).catch(() => {});
+    return () => { active = false; };
+  }, [user]);
 
   useEffect(() => {
     if (!user || !supabase) return undefined;
@@ -1105,6 +1113,10 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
         }
         liveReservationId.current = token.reservationId || null;
         liveReservationStartedAt.current = Date.now();
+        scheduleLiveTimeout('max-session', Math.max(1, Number(token.maxSessionSeconds) || 60) * 1000, sessionId, () => {
+          stopLiveSession(false);
+          showNotice('Your voice session time is up.');
+        });
 
         setVoicePhase('opening-socket');
         const apiVersion = token.apiVersion || LIVE_API_VERSION;
@@ -1425,6 +1437,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
                     onAction={showNotice}
                     onLogout={onLogout}
                     onDeleteAccount={onDeleteAccount}
+                    usage={usage}
                   />
                 )}
               </div>
@@ -1814,7 +1827,7 @@ function HistoryScreen({ conversations, loading, onOpenConversation, onStartNew 
   );
 }
 
-function ProfileScreen({ user, conversations, onOpenSettings, onAction, onLogout, onDeleteAccount }) {
+function ProfileScreen({ user, conversations, onOpenSettings, onAction, onLogout, onDeleteAccount, usage }) {
   const modeCounts = conversations.reduce((counts, conversation) => ({
     ...counts,
     [conversation.mode]: (counts[conversation.mode] || 0) + 1,
@@ -1837,6 +1850,7 @@ function ProfileScreen({ user, conversations, onOpenSettings, onAction, onLogout
         <div><strong>{modeCounts.Argue || 0}</strong><span>Arguments</span></div>
         <div><strong>{modeCounts.Roast || 0}</strong><span>Roasts</span></div>
       </section>
+      {usage && <section className="usage-summary" aria-label="Plan usage"><div><span>{usage.plan} plan</span><strong>{usage.textRepliesUsed}/{usage.textRepliesLimit}</strong><small>text replies this month</small></div><div><span>Voice remaining</span><strong>{Math.floor(usage.remainingVoiceSeconds / 60)} min</strong><small>resets {new Date(usage.billingPeriodEnd).toLocaleDateString()}</small></div></section>}
       <section className="profile-section" aria-label="Settings">
         <span className="profile-section-label">SETTINGS</span>
         <div className="settings-list">
