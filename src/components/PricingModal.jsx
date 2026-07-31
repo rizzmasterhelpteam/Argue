@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { Check, Crown, Lightning, X } from '@phosphor-icons/react';
 
 const PLANS = [
-  { id: 'free', name: 'Free', detail: 'For testing the waters', features: ['3 text replies each month', '2 voice minutes each month', '60-second voice sessions'] },
-  { id: 'starter', name: 'Starter', detail: 'For regular practice', features: ['5,000 text replies each month', '3 voice hours each month', '3-minute voice sessions'] },
-  { id: 'pro', name: 'Pro', detail: 'For serious debaters', features: ['20,000 text replies each month', '10 voice hours each month', '5-minute voice sessions'], featured: true },
+  { id: 'free', name: 'Free', detail: 'For testing the waters', features: ['3 text replies each month', '2 voice minutes each month', '2-minute voice sessions'] },
+  { id: 'starter', name: 'Starter', detail: 'For regular practice', features: ['5,000 text replies each month', '3 voice hours each month', '15-minute voice sessions'] },
+  { id: 'pro', name: 'Pro', detail: 'For serious debaters', features: ['20,000 text replies each month', '10 voice hours each month', '30-minute voice sessions'], featured: true },
 ];
 
 export function PricingModal({ usage, onClose, onCheckout }) {

@@ -70,9 +70,9 @@ const VOICE_PHASES = [
 ];
 
 const USAGE_DEFAULTS = {
-  free: { textRepliesLimit: 3, voiceSecondsLimit: 120, maxVoiceSessionSeconds: 60 },
-  starter: { textRepliesLimit: 5000, voiceSecondsLimit: 10800, maxVoiceSessionSeconds: 180 },
-  pro: { textRepliesLimit: 20000, voiceSecondsLimit: 36000, maxVoiceSessionSeconds: 300 },
+  free: { textRepliesLimit: 3, voiceSecondsLimit: 120, maxVoiceSessionSeconds: 120 },
+  starter: { textRepliesLimit: 5000, voiceSecondsLimit: 10800, maxVoiceSessionSeconds: 900 },
+  pro: { textRepliesLimit: 20000, voiceSecondsLimit: 36000, maxVoiceSessionSeconds: 1800 },
 };
 
 function hasUsageContract(value) {

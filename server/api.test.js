@@ -23,7 +23,7 @@ function createSupabaseMock({ conversationOwner = 'user-a' } = {}) {
     rpc: vi.fn(async (name, args) => {
       calls.rpc.push({ name, args });
       if (name === 'consume_rate_limit') return { data: [{ allowed: true, retry_after_seconds: 30 }], error: null };
-      if (name === 'reserve_voice_usage') return { data: [{ reservation_id: 'reservation-a', expires_at: '2026-07-30T12:01:00Z', reserved_seconds: 60, remaining_voice_seconds: 60, plan: 'free' }], error: null };
+      if (name === 'reserve_voice_usage') return { data: [{ reservation_id: 'reservation-a', expires_at: '2026-07-30T12:02:00Z', reserved_seconds: 120, remaining_voice_seconds: 0, plan: 'free' }], error: null };
       if (name === 'create_text_reply') return { data: [{ id: `message-${++messageIndex}`, role: 'assistant', source: 'text', content: args.p_content, model: args.p_model, created_at: '2026-07-30T12:00:00Z' }], error: null };
       return { data: null, error: null };
     }),
