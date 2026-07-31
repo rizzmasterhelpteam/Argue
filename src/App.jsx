@@ -1359,6 +1359,20 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
     showNotice('Voice settings reset.');
   };
 
+  const startCheckout = async (plan) => {
+    try {
+      const { checkoutUrl } = await apiJson('/api/billing/checkout', {
+        method: 'POST',
+        body: JSON.stringify({ plan }),
+      });
+      if (!checkoutUrl) throw new Error('Checkout could not be started.');
+      window.location.assign(checkoutUrl);
+    } catch (error) {
+      showNotice(error.message || 'Checkout could not be started.');
+      throw error;
+    }
+  };
+
   const navigate = (destination) => {
     haptic();
     if (destination !== activeNav && !['idle', 'stopped'].includes(voicePhase)) stopConversation(false);
@@ -1444,6 +1458,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
                     conversations={conversations}
                     onOpenSettings={openSettings}
                     onAction={showNotice}
+                    onCheckout={startCheckout}
                     onLogout={onLogout}
                     onDeleteAccount={onDeleteAccount}
                     usage={usage}
@@ -1836,7 +1851,9 @@ function HistoryScreen({ conversations, loading, onOpenConversation, onStartNew 
   );
 }
 
-function ProfileScreen({ user, conversations, onOpenSettings, onAction, onLogout, onDeleteAccount, usage }) {
+function ProfileScreen({ user, conversations, onOpenSettings, onAction, onCheckout, onLogout, onDeleteAccount, usage }) {
+  const [checkoutPlan, setCheckoutPlan] = useState('');
+  const currentPlan = usage?.plan || 'free';
   const modeCounts = conversations.reduce((counts, conversation) => ({
     ...counts,
     [conversation.mode]: (counts[conversation.mode] || 0) + 1,
@@ -1872,6 +1889,13 @@ function ProfileScreen({ user, conversations, onOpenSettings, onAction, onLogout
           <UsageBar label="Voice session length" used={usage.maxVoiceSessionSeconds} limit={usage.maxVoiceSessionSeconds} suffix=" sec" />
           <small>Resets {new Date(usage.billingPeriodEnd).toLocaleDateString()}</small>
         </article>
+      </section>}
+      {currentPlan !== 'pro' && <section className="billing-actions" aria-label="Upgrade plan">
+        <div><span className="usage-kicker">Upgrade</span><strong>More room to make your case.</strong></div>
+        <div>
+          {currentPlan === 'free' && <button type="button" disabled={Boolean(checkoutPlan)} onClick={async () => { setCheckoutPlan('starter'); try { await onCheckout('starter'); } catch { setCheckoutPlan(''); } }}>Starter</button>}
+          <button type="button" className="billing-pro-button" disabled={Boolean(checkoutPlan)} onClick={async () => { setCheckoutPlan('pro'); try { await onCheckout('pro'); } catch { setCheckoutPlan(''); } }}>{checkoutPlan === 'pro' ? 'Opening checkout...' : 'Go Pro'}</button>
+        </div>
       </section>}
       <section className="profile-section" aria-label="Settings">
         <span className="profile-section-label">SETTINGS</span>
