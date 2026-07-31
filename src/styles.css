@@ -930,6 +930,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .usage-detail { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: -2px 0 0; color: #aeb1b5; font-size: 12px; }
 .usage-detail strong { color: #e5e7e9; font-size: 13px; }
 .usage-detail span { white-space: nowrap; }
+.usage-unavailable { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px; }
+.usage-unavailable strong { color: #f1f2f3; }
+.usage-unavailable button { min-height: 36px; padding: 0 14px; border: 1px solid #4b4e51; border-radius: 8px; background: transparent; color: #f1f2f3; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
 .billing-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; margin-top: 14px; padding: 16px 18px; border: 1px solid #2d3033; border-radius: 12px; background: #111314; }
 .billing-actions strong { display: block; margin-top: 6px; color: #f1f2f3; font-size: 15px; }
 .billing-actions button { min-width: 96px; min-height: 38px; padding: 0 14px; border: 1px solid #4b4e51; border-radius: 8px; background: transparent; color: #f1f2f3; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }

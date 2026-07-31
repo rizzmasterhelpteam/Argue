@@ -75,31 +75,30 @@ const USAGE_DEFAULTS = {
   pro: { textRepliesLimit: 20000, voiceSecondsLimit: 36000, maxVoiceSessionSeconds: 300 },
 };
 
-function normalizeUsage(value) {
-  const raw = value && typeof value === 'object' ? value : {};
-  const plan = Object.hasOwn(USAGE_DEFAULTS, raw.plan) ? raw.plan : 'free';
-  const defaults = USAGE_DEFAULTS[plan];
-  const number = (input, fallback = 0) => Number.isFinite(Number(input)) ? Math.max(0, Number(input)) : fallback;
-  const now = new Date();
-  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
-  const voiceSecondsUsed = number(raw.voiceSecondsUsed);
-  const addonVoiceSecondsRemaining = number(raw.addonVoiceSecondsRemaining);
-  return {
-    plan,
-    status: typeof raw.status === 'string' && raw.status ? raw.status : 'active',
-    textRepliesUsed: number(raw.textRepliesUsed),
-    textRepliesLimit: number(raw.textRepliesLimit, defaults.textRepliesLimit),
-    voiceSecondsUsed,
-    voiceSecondsLimit: number(raw.voiceSecondsLimit, defaults.voiceSecondsLimit),
-    addonVoiceSecondsRemaining,
-    remainingVoiceSeconds: number(raw.remainingVoiceSeconds, Math.max(0, defaults.voiceSecondsLimit - voiceSecondsUsed) + addonVoiceSecondsRemaining),
-    maxVoiceSessionSeconds: number(raw.maxVoiceSessionSeconds, defaults.maxVoiceSessionSeconds),
-    billingPeriodEnd: typeof raw.billingPeriodEnd === 'string' && !Number.isNaN(Date.parse(raw.billingPeriodEnd)) ? raw.billingPeriodEnd : nextMonth,
-  };
+function hasUsageContract(value) {
+  return Boolean(value && typeof value === 'object'
+    && Object.hasOwn(USAGE_DEFAULTS, value.plan)
+    && typeof value.status === 'string'
+    && typeof value.billingPeriodStart === 'string'
+    && typeof value.billingPeriodEnd === 'string'
+    && !Number.isNaN(Date.parse(value.billingPeriodStart))
+    && !Number.isNaN(Date.parse(value.billingPeriodEnd))
+    && ['textRepliesUsed', 'textRepliesLimit', 'voiceSecondsUsed', 'voiceSecondsLimit', 'addonVoiceSecondsRemaining', 'remainingVoiceSeconds', 'maxVoiceSessionSeconds'].every((key) => Number.isFinite(Number(value[key]))));
 }
 
-function hasUsageContract(value) {
-  return Boolean(value && typeof value === 'object' && Object.hasOwn(USAGE_DEFAULTS, value.plan) && Number.isFinite(Number(value.textRepliesLimit)) && Number.isFinite(Number(value.voiceSecondsLimit)));
+function normalizeUsage(value) {
+  if (!hasUsageContract(value)) return null;
+  const number = (input) => Math.max(0, Number(input));
+  return {
+    ...value,
+    textRepliesUsed: number(value.textRepliesUsed),
+    textRepliesLimit: number(value.textRepliesLimit),
+    voiceSecondsUsed: number(value.voiceSecondsUsed),
+    voiceSecondsLimit: number(value.voiceSecondsLimit),
+    addonVoiceSecondsRemaining: number(value.addonVoiceSecondsRemaining),
+    remainingVoiceSeconds: number(value.remainingVoiceSeconds),
+    maxVoiceSessionSeconds: number(value.maxVoiceSessionSeconds),
+  };
 }
 
 function voiceUiStateForPhase(phase) {
@@ -435,6 +434,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
   const [playingMessageId, setPlayingMessageId] = useState(null);
   const [notice, setNotice] = useState('');
   const [usage, setUsage] = useState(null);
+  const [usageUnavailable, setUsageUnavailable] = useState(false);
   const [pricingOpen, setPricingOpen] = useState(false);
   const liveSocket = useRef(null);
   const stopLiveSessionRef = useRef(null);
@@ -483,9 +483,12 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
     if (!user) return;
 
     try {
-      setUsage(normalizeUsage(await apiJson('/api/me/usage')));
+      const nextUsage = normalizeUsage(await apiJson('/api/me/usage'));
+      if (!nextUsage) throw new Error('Usage response is incomplete.');
+      setUsage(nextUsage);
+      setUsageUnavailable(false);
     } catch {
-      // The dashboard is supplemental UI and should not interrupt a conversation.
+      setUsageUnavailable(true);
     }
   }, [user]);
 
@@ -507,6 +510,14 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
 
   useEffect(() => {
     void refreshUsage();
+  }, [refreshUsage]);
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void refreshUsage();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
   }, [refreshUsage]);
 
   useEffect(() => {
@@ -1126,7 +1137,9 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
     if (user) {
       try {
         const currentUsage = await apiJson('/api/me/usage');
-        setUsage(normalizeUsage(currentUsage));
+        const normalizedUsage = normalizeUsage(currentUsage);
+        if (normalizedUsage) setUsage(normalizedUsage);
+        else throw new Error('Usage response is incomplete.');
         if (Number(currentUsage.remainingVoiceSeconds) <= 0) {
           showNotice('Voice time used. Buy 30 more minutes for $5 or upgrade.');
           return;
@@ -1557,6 +1570,8 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
                     onLogout={onLogout}
                     onDeleteAccount={onDeleteAccount}
                     usage={usage}
+                    usageUnavailable={usageUnavailable}
+                    onRetryUsage={refreshUsage}
                   />
                 )}
               </div>
@@ -1947,7 +1962,7 @@ function HistoryScreen({ conversations, loading, onOpenConversation, onStartNew 
   );
 }
 
-function ProfileScreen({ user, conversations, onOpenSettings, onAction, onUpgrade, onLogout, onDeleteAccount, usage }) {
+function ProfileScreen({ user, conversations, onOpenSettings, onAction, onUpgrade, onLogout, onDeleteAccount, usage, usageUnavailable, onRetryUsage }) {
   const currentPlan = usage?.plan || 'free';
   const modeCounts = conversations.reduce((counts, conversation) => ({
     ...counts,
@@ -1985,6 +2000,7 @@ function ProfileScreen({ user, conversations, onOpenSettings, onAction, onUpgrad
           <small>Resets {new Date(usage.billingPeriodEnd).toLocaleDateString()}</small>
         </article>
       </section>}
+      {!usage && usageUnavailable && <section className="usage-dashboard usage-unavailable" aria-label="Plan usage unavailable"><strong>Usage unavailable</strong><button type="button" onClick={onRetryUsage}>Retry</button></section>}
       {currentPlan !== 'pro' && <section className="billing-actions" aria-label="Upgrade plan">
         <div><span className="usage-kicker">Membership</span><strong>Choose the plan that fits your pace.</strong></div>
         <button type="button" className="billing-pro-button" onClick={onUpgrade}>View plans</button>
@@ -2009,8 +2025,9 @@ function ProfileScreen({ user, conversations, onOpenSettings, onAction, onUpgrad
 function UsageBar({ label, used, limit, suffix = '' }) {
   const safeLimit = Math.max(1, Number(limit) || 1);
   const safeUsed = Math.max(0, Number(used) || 0);
-  const percent = Math.min(100, (safeUsed / safeLimit) * 100);
-  return <div className="capacity-row"><div><span>{label}</span><strong>{safeUsed}{suffix} / {safeLimit}{suffix}</strong></div><span className="capacity-track" aria-label={`${label}: ${safeUsed} of ${safeLimit}`}><span style={{ width: `${percent}%` }} /></span></div>;
+  const displayUsed = Math.min(safeLimit, safeUsed);
+  const percent = (displayUsed / safeLimit) * 100;
+  return <div className="capacity-row"><div><span>{label}</span><strong>{displayUsed}{suffix} / {safeLimit}{suffix}</strong></div><span className="capacity-track" aria-label={`${label}: ${displayUsed} of ${safeLimit}`}><span style={{ width: `${percent}%` }} /></span></div>;
 }
 
 function DeleteAccountButton({ onDeleteAccount, onAction }) {

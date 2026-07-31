@@ -1,5 +1,12 @@
 import { supabase } from './supabase';
 
+function invalidApiResponse(response) {
+  const error = new Error('The server returned an invalid response.');
+  error.code = 'INVALID_API_RESPONSE';
+  error.status = response.status;
+  return error;
+}
+
 export async function apiJson(path, options = {}) {
   const request = async (forceRefresh = false) => {
     const headers = new Headers(options.headers || {});
@@ -17,7 +24,15 @@ export async function apiJson(path, options = {}) {
     }
     if (session?.access_token) headers.set('authorization', `Bearer ${session.access_token}`);
     const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}${path}`, { ...options, headers });
-    return { response, data: await response.json().catch(() => ({})) };
+    const contentType = response.headers?.get?.('content-type');
+    if (contentType && !contentType.toLowerCase().includes('application/json')) throw invalidApiResponse(response);
+    let data;
+    try {
+      data = await response.json();
+    } catch {
+      throw invalidApiResponse(response);
+    }
+    return { response, data };
   };
 
   let { response, data } = await request();
