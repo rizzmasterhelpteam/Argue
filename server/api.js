@@ -347,7 +347,7 @@ export async function handleChat(request, env) {
   if (!savedAssistantMessage) throw new ApiError('The AI reply could not be saved.', 500, null, { code: 'TEXT_REPLY_SAVE_FAILED', stage: 'chat', requestId: id });
   await supabase.from('conversations').update({ title: input.slice(0, 80) }).eq('id', conversation.id).eq('user_id', user.id);
   await writeUsageLog(supabase, { user_id: user.id, endpoint: '/api/chat', provider: 'groq', model: usedModel, status_code: 200, latency_ms: Date.now() - startedAt, request_id: id });
-  return json({ reply, conversationId: conversation.id, userMessage: responseMessage(savedUserMessage), assistantMessage: responseMessage(savedAssistantMessage) });
+  return json({ reply, conversationId: conversation.id, userMessage: responseMessage(savedUserMessage), assistantMessage: responseMessage(savedAssistantMessage), usage: await getUserEntitlement(supabase, user.id) });
 }
 
 export async function handlePersistVoiceMessage(request, env) {

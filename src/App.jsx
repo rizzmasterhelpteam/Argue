@@ -844,7 +844,11 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
       void apiJson('/api/live/release', {
         method: 'POST',
         body: JSON.stringify({ reservationId, durationSeconds: reservationDuration }),
-      }).then(() => refreshUsage()).catch(() => {});
+      }).then((response) => {
+        if (response.usage) setUsage(response.usage);
+        else return refreshUsage();
+        return undefined;
+      }).catch(() => {});
     }
     const socket = liveSocket.current;
     liveSocket.current = null;
@@ -1314,7 +1318,8 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
       } else {
         setMessages((current) => [...current, { id: createId('text-ai'), role: 'assistant', time: getCurrentTime(), text: response.reply }]);
       }
-      await refreshUsage();
+      if (response.usage) setUsage(response.usage);
+      else await refreshUsage();
     } catch (error) {
       showNotice(error.message);
     } finally {
