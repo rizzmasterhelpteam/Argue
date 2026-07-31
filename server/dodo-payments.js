@@ -165,20 +165,6 @@ export async function handleDodoSubscriptionSync(request, env) {
   return json({ subscription });
 }
 
-export async function handleDodoBillingStatus(request, env) {
-  const id = requestId(request);
-  await authenticated(request, env, id, 'billing_status');
-  return json({
-    dodoApiKeyConfigured: Boolean(envValue(env, 'DODO_PAYMENTS_API_KEY')),
-    starterProductConfigured: Boolean(productId(env, 'starter')),
-    proProductConfigured: Boolean(productId(env, 'pro')),
-    voicePackProductConfigured: Boolean(voicePackProductId(env)),
-    webhookKeyConfigured: Boolean(envValue(env, 'DODO_PAYMENTS_WEBHOOK_KEY')),
-    appUrlConfigured: Boolean(envValue(env, 'APP_URL')),
-    environment: envValue(env, 'DODO_PAYMENTS_ENVIRONMENT') || 'live_mode',
-  });
-}
-
 function paymentProductId(data) {
   return data?.product_id || data?.product_cart?.[0]?.product_id || null;
 }
