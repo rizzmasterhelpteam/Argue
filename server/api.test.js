@@ -97,6 +97,8 @@ describe('authenticated Vercel API handlers', () => {
       const body = JSON.parse(options.body);
       expect(body.model).toBe('openai/gpt-oss-120b');
       expect(body.messages[0].role).toBe('system');
+      expect(body.messages[0].content).toContain('one to three short sentences');
+      expect(body.max_completion_tokens).toBe(180);
       return new Response(JSON.stringify({ choices: [{ message: { content: 'Short answer.' } }] }), { status: 200 });
     }));
     const response = await handleChat(jsonRequest('/api/chat', { conversationId: 'conversation-a', input: 'Cities should ban private cars.' }), {

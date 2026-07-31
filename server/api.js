@@ -174,7 +174,7 @@ async function groqCompletion({ model, messages, env, signal }) {
       model,
       messages,
       temperature: 0.45,
-      max_completion_tokens: 256,
+      max_completion_tokens: 180,
       ...(model === 'openai/gpt-oss-20b' || model === 'openai/gpt-oss-120b' ? { reasoning_effort: 'low' } : {}),
     }),
   }, CHAT_TIMEOUT_MS, signal);

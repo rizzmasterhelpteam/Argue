@@ -6,7 +6,7 @@ describe('systemPrompt', () => {
     for (const mode of ['argue', 'brainstorm']) {
       const prompt = systemPrompt(mode);
       expect(prompt).toContain('same language the user uses');
-      expect(prompt).toContain('level of detail and length the user asks for');
+      expect(prompt).toContain('Only go longer when the user explicitly asks for detail');
       expect(prompt).toContain('Do not discuss, reveal, or speculate about the underlying model');
       expect(prompt).toContain('calmly say that you are Argue AI');
       expect(prompt).not.toMatch(/no more than \d+ words/i);
