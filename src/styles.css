@@ -946,8 +946,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .voice-core::before { inset: -8px; }
   .core-waveform { width: 38px; height: 38px; margin-bottom: 7px; }
   .voice-core strong { font-size: 27px; }
-  .state-row { display: none; }
-  .voice-caption { margin-top: 14px; font-size: 12px; }
+  .state-row { width: min(330px, 100%); margin-top: 0; padding: 7px 10px; border: 1px solid #242629; border-radius: 12px; background: rgba(12, 13, 14, .58); }
+  .state-item { gap: 3px; font-size: 11px; }
+  .state-item svg { width: 19px; height: 19px; }
+  .state-dot { width: 5px; height: 5px; }
+  .voice-caption { margin-top: 7px; font-size: 11px; }
 }
 
 @media (max-width: 420px) {
