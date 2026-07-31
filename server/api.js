@@ -1,6 +1,7 @@
 import {
   enforcePersistentRateLimit,
   finishVoiceUsage,
+  getUserEntitlement,
   requireAuthenticatedUser,
   reserveVoiceUsage,
   writeUsageLog,
@@ -22,10 +23,6 @@ export const MAX_CHAT_BODY_BYTES = 12_000;
 export const MAX_LIVE_TOKEN_BODY_BYTES = 1_000;
 export const MAX_MESSAGE_BODY_BYTES = 6_000;
 
-const CHAT_RATE_LIMIT_WINDOW_SECONDS = 60;
-const CHAT_RATE_LIMIT_MAX_REQUESTS = 12;
-const LIVE_TOKEN_RATE_LIMIT_WINDOW_SECONDS = 300;
-const LIVE_TOKEN_RATE_LIMIT_MAX_REQUESTS = 20;
 
 export class ApiError extends Error {
   constructor(message, status = 500, retryAfterSeconds = null, details = {}) {
@@ -218,19 +215,20 @@ export async function handleLiveToken(request, env) {
   const startedAt = Date.now();
   if (contentLengthExceeds(request, MAX_LIVE_TOKEN_BODY_BYTES)) throw new ApiError('That voice session request is too large.', 413, null, { code: 'REQUEST_TOO_LARGE', stage: 'token_creation', requestId: id });
   const { supabase, user } = await authenticate(request, env, id, 'token_creation');
+  const entitlement = await getUserEntitlement(supabase, user.id);
   const payload = await parseJson(request, { code: 'INVALID_ARGUMENT', stage: 'token_creation', requestId: id });
   const mode = normalizeMode(payload?.mode);
   const apiKey = getGeminiApiKey(env);
   if (!apiKey) throw new ApiError('Gemini Live is not configured yet.', 503, null, { code: 'GEMINI_NOT_CONFIGURED', stage: 'token_creation', requestId: id });
 
   await enforceRateLimit(supabase, {
-    bucket: 'live-token', userId: user.id, windowSeconds: LIVE_TOKEN_RATE_LIMIT_WINDOW_SECONDS, limit: LIVE_TOKEN_RATE_LIMIT_MAX_REQUESTS,
+    bucket: 'live-token', userId: user.id, windowSeconds: entitlement.liveStartWindowSeconds, limit: entitlement.liveStartRateLimit,
   }, 'Too many voice starts. Please wait a few minutes and try again.', id, 'rate_limit');
 
   const model = getLiveModel(env);
   let reservation;
   try {
-    reservation = await reserveVoiceUsage(supabase, { userId: user.id, model });
+    reservation = await reserveVoiceUsage(supabase, { userId: user.id, model, durationSeconds: entitlement.maxVoiceSessionSeconds });
   } catch (error) {
     if (String(error?.message || '').includes('VOICE_DAILY_LIMIT')) {
       throw new ApiError('The free voice limit is 5 sessions per day. Please try again tomorrow.', 429, 3600, { code: 'VOICE_LIMIT_REACHED', stage: 'rate_limit', requestId: id });
@@ -245,7 +243,7 @@ export async function handleLiveToken(request, env) {
       body: JSON.stringify({
         uses: 1,
         expireTime: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-        newSessionExpireTime: new Date(Date.now() + 60 * 1000).toISOString(),
+        newSessionExpireTime: new Date(Date.now() + entitlement.maxVoiceSessionSeconds * 1000).toISOString(),
         bidiGenerateContentSetup: buildLiveTokenConstraints(env, mode),
       }),
     }, LIVE_TOKEN_TIMEOUT_MS, request.signal);
@@ -267,6 +265,8 @@ export async function handleLiveToken(request, env) {
       expiresAt: tokenData.expireTime || reservation.expires_at || null,
       reservationId: reservation.reservation_id,
       mode: displayMode(mode),
+      maxSessionSeconds: entitlement.maxVoiceSessionSeconds,
+      remainingVoiceSeconds: entitlement.remainingVoiceSeconds,
     });
   } catch (error) {
     await finishVoiceUsage(supabase, { userId: user.id, reservationId: reservation.reservation_id, durationSeconds: 0 }).catch(() => {});
@@ -288,12 +288,14 @@ export async function handleChat(request, env) {
   const startedAt = Date.now();
   if (contentLengthExceeds(request, MAX_CHAT_BODY_BYTES)) throw new ApiError('That argument is too large. Start a new conversation or shorten it.', 413, null, { code: 'REQUEST_TOO_LARGE', stage: 'chat', requestId: id });
   const { supabase, user } = await authenticate(request, env, id, 'chat');
+  const entitlement = await getUserEntitlement(supabase, user.id);
   const payload = await parseJson(request, { code: 'INVALID_ARGUMENT', stage: 'chat', requestId: id });
   const input = getMessageContent(payload?.input);
   if (!input || input.length > MAX_CHAT_INPUT_CHARS) throw new ApiError(`Your argument must be between 1 and ${MAX_CHAT_INPUT_CHARS} characters.`, 400, null, { code: 'INVALID_ARGUMENT', stage: 'chat', requestId: id });
   const conversation = await assertOwnedConversation(supabase, user.id, payload?.conversationId, id);
   const mode = normalizeMode(conversation.mode);
-  await enforceRateLimit(supabase, { bucket: 'chat', userId: user.id, windowSeconds: CHAT_RATE_LIMIT_WINDOW_SECONDS, limit: CHAT_RATE_LIMIT_MAX_REQUESTS }, 'Too many messages. Please wait a moment and try again.', id, 'rate_limit');
+  await enforceRateLimit(supabase, { bucket: 'chat', userId: user.id, windowSeconds: entitlement.chatWindowSeconds, limit: entitlement.chatRateLimit }, 'Too many messages. Please wait a moment and try again.', id, 'rate_limit');
+  if (entitlement.textRepliesUsed >= entitlement.textRepliesLimit) throw new ApiError('Monthly fair-use text limit reached. Upgrade or wait for reset.', 429, 3600, { code: 'TEXT_LIMIT_REACHED', stage: 'quota', requestId: id });
 
   const { data: savedUserMessage, error: saveUserError } = await supabase
     .from('messages')
@@ -375,11 +377,18 @@ export function handleStatus(_request, env) {
   });
 }
 
+export async function handleUsage(request, env) {
+  const id = requestId(request);
+  const { supabase, user } = await authenticate(request, env, id, 'usage');
+  return json(await getUserEntitlement(supabase, user.id));
+}
+
 export const handleHealth = handleStatus;
 
 export async function handleApi(request, env, url = new URL(request.url)) {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204 });
   if ((url.pathname === '/api/status' || url.pathname === '/api/health') && request.method === 'GET') return handleStatus(request, env);
+  if (url.pathname === '/api/me/usage' && request.method === 'GET') return handleUsage(request, env);
   if ((url.pathname === '/api/live/token' || url.pathname === '/api/live-token') && request.method === 'POST') return handleLiveToken(request, env);
   if (url.pathname === '/api/live/release' && request.method === 'POST') return handleLiveRelease(request, env);
   if (url.pathname === '/api/chat' && request.method === 'POST') return handleChat(request, env);

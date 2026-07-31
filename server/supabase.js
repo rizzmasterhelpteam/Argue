@@ -97,3 +97,29 @@ export async function writeUsageLog(supabase, entry) {
   const { error } = await supabase.from('api_usage_logs').insert(entry);
   if (error) console.error('Failed to write API usage log', error.code || error.message);
 }
+
+export const PLAN_DEFINITIONS = {
+  free: { monthlyTextLimit: 3, monthlyVoiceSeconds: 120, maxVoiceSessionSeconds: 60, chatRateLimit: 3, chatWindowSeconds: 300, liveStartRateLimit: 1, liveStartWindowSeconds: 300 },
+  starter: { monthlyTextLimit: 5000, monthlyVoiceSeconds: 10800, maxVoiceSessionSeconds: 180, chatRateLimit: 20, chatWindowSeconds: 60, liveStartRateLimit: 3, liveStartWindowSeconds: 600 },
+  pro: { monthlyTextLimit: 20000, monthlyVoiceSeconds: 36000, maxVoiceSessionSeconds: 300, chatRateLimit: 30, chatWindowSeconds: 60, liveStartRateLimit: 5, liveStartWindowSeconds: 600 },
+};
+
+export async function getUserEntitlement(supabase, userId) {
+  const subscriptionQuery = supabase.from('subscriptions');
+  if (typeof subscriptionQuery?.select !== 'function') return { plan: 'free', status: 'active', billingPeriodStart: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString(), billingPeriodEnd: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1).toISOString(), textRepliesUsed: 0, textRepliesLimit: 3, voiceSecondsUsed: 0, voiceSecondsLimit: 120, addonVoiceSecondsRemaining: 0, remainingVoiceSeconds: 120, maxVoiceSessionSeconds: 60, ...PLAN_DEFINITIONS.free };
+  const { data: subscription, error: subscriptionError } = await subscriptionQuery.select('plan,status,current_period_start,current_period_end').eq('user_id', userId).maybeSingle();
+  if (subscriptionError) throw subscriptionError;
+  const plan = PLAN_DEFINITIONS[subscription?.plan] ? subscription.plan : 'free';
+  const definition = PLAN_DEFINITIONS[plan];
+  const periodStart = subscription?.current_period_start || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
+  const periodEnd = subscription?.current_period_end || new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1).toISOString();
+  const [{ count: textRepliesUsed, data: voiceRows }, { data: packs, error: packsError }] = await Promise.all([
+    supabase.from('messages').select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('role', 'assistant').eq('source', 'text').gte('created_at', periodStart).lt('created_at', periodEnd),
+    supabase.from('voice_usage').select('duration_seconds,billable_seconds').eq('user_id', userId).gte('created_at', periodStart).lt('created_at', periodEnd),
+  ]);
+  if (packsError) throw packsError;
+  const voiceSecondsUsed = (voiceRows || []).reduce((sum, row) => sum + Number(row.billable_seconds ?? row.duration_seconds ?? 0), 0);
+  const { data: addonRows } = await supabase.from('voice_credit_packs').select('seconds_total,seconds_used').eq('user_id', userId).eq('status', 'active').gt('expires_at', new Date().toISOString());
+  const addonVoiceSecondsRemaining = (addonRows || []).reduce((sum, row) => sum + Math.max(0, Number(row.seconds_total) - Number(row.seconds_used)), 0);
+  return { plan, status: subscription?.status || 'active', billingPeriodStart: periodStart, billingPeriodEnd: periodEnd, textRepliesUsed: textRepliesUsed || 0, textRepliesLimit: definition.monthlyTextLimit, voiceSecondsUsed, voiceSecondsLimit: definition.monthlyVoiceSeconds, addonVoiceSecondsRemaining, remainingVoiceSeconds: Math.max(0, definition.monthlyVoiceSeconds - voiceSecondsUsed) + addonVoiceSecondsRemaining, maxVoiceSessionSeconds: definition.maxVoiceSessionSeconds, ...definition };
+}
