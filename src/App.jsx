@@ -69,6 +69,39 @@ const VOICE_PHASES = [
   'stopped',
 ];
 
+const USAGE_DEFAULTS = {
+  free: { textRepliesLimit: 3, voiceSecondsLimit: 120, maxVoiceSessionSeconds: 60 },
+  starter: { textRepliesLimit: 5000, voiceSecondsLimit: 10800, maxVoiceSessionSeconds: 180 },
+  pro: { textRepliesLimit: 20000, voiceSecondsLimit: 36000, maxVoiceSessionSeconds: 300 },
+};
+
+function normalizeUsage(value) {
+  const raw = value && typeof value === 'object' ? value : {};
+  const plan = Object.hasOwn(USAGE_DEFAULTS, raw.plan) ? raw.plan : 'free';
+  const defaults = USAGE_DEFAULTS[plan];
+  const number = (input, fallback = 0) => Number.isFinite(Number(input)) ? Math.max(0, Number(input)) : fallback;
+  const now = new Date();
+  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
+  const voiceSecondsUsed = number(raw.voiceSecondsUsed);
+  const addonVoiceSecondsRemaining = number(raw.addonVoiceSecondsRemaining);
+  return {
+    plan,
+    status: typeof raw.status === 'string' && raw.status ? raw.status : 'active',
+    textRepliesUsed: number(raw.textRepliesUsed),
+    textRepliesLimit: number(raw.textRepliesLimit, defaults.textRepliesLimit),
+    voiceSecondsUsed,
+    voiceSecondsLimit: number(raw.voiceSecondsLimit, defaults.voiceSecondsLimit),
+    addonVoiceSecondsRemaining,
+    remainingVoiceSeconds: number(raw.remainingVoiceSeconds, Math.max(0, defaults.voiceSecondsLimit - voiceSecondsUsed) + addonVoiceSecondsRemaining),
+    maxVoiceSessionSeconds: number(raw.maxVoiceSessionSeconds, defaults.maxVoiceSessionSeconds),
+    billingPeriodEnd: typeof raw.billingPeriodEnd === 'string' && !Number.isNaN(Date.parse(raw.billingPeriodEnd)) ? raw.billingPeriodEnd : nextMonth,
+  };
+}
+
+function hasUsageContract(value) {
+  return Boolean(value && typeof value === 'object' && Object.hasOwn(USAGE_DEFAULTS, value.plan) && Number.isFinite(Number(value.textRepliesLimit)) && Number.isFinite(Number(value.voiceSecondsLimit)));
+}
+
 function voiceUiStateForPhase(phase) {
   if (phase === 'error') return 'error';
   if (phase === 'playing') return 'speaking';
@@ -450,7 +483,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
     if (!user) return;
 
     try {
-      setUsage(await apiJson('/api/me/usage'));
+      setUsage(normalizeUsage(await apiJson('/api/me/usage')));
     } catch {
       // The dashboard is supplemental UI and should not interrupt a conversation.
     }
@@ -845,7 +878,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
         method: 'POST',
         body: JSON.stringify({ reservationId, durationSeconds: reservationDuration }),
       }).then((response) => {
-        if (response.usage) setUsage(response.usage);
+        if (hasUsageContract(response.usage)) setUsage(normalizeUsage(response.usage));
         else return refreshUsage();
         return undefined;
       }).catch(() => {});
@@ -1093,7 +1126,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
     if (user) {
       try {
         const currentUsage = await apiJson('/api/me/usage');
-        setUsage(currentUsage);
+        setUsage(normalizeUsage(currentUsage));
         if (Number(currentUsage.remainingVoiceSeconds) <= 0) {
           showNotice('Voice time used. Buy 30 more minutes for $5 or upgrade.');
           return;
@@ -1318,7 +1351,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
       } else {
         setMessages((current) => [...current, { id: createId('text-ai'), role: 'assistant', time: getCurrentTime(), text: response.reply }]);
       }
-      if (response.usage) setUsage(response.usage);
+      if (hasUsageContract(response.usage)) setUsage(normalizeUsage(response.usage));
       else await refreshUsage();
     } catch (error) {
       showNotice(error.message);
