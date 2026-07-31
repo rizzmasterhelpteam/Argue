@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowRight, Eye, EyeSlash, GoogleLogo, LockKey, UserCircle } from '@phosphor-icons/react';
+import { ArrowRight, Eye, EyeSlash, GoogleLogo, LockKey, Waveform } from '@phosphor-icons/react';
 import { useAuth } from '../../context/AuthContext';
 
 export function AuthScreen() {
@@ -43,8 +43,9 @@ export function AuthScreen() {
   return (
     <main className="auth-stage">
       <section className="auth-panel" aria-labelledby="auth-title">
-        <div className="auth-mark"><UserCircle size={32} weight="fill" /></div>
-        <p className="eyebrow">ARGUE AI</p>
+        <div className="auth-brand" aria-label="Argue AI"><span>Argue</span><b>AI</b></div>
+        <div className="auth-mark" aria-hidden="true"><Waveform size={25} weight="bold" /></div>
+        <p className="eyebrow">YOUR THINKING ARENA</p>
         <h1 id="auth-title">{isRegistering ? 'Make your case.' : 'Welcome back.'}</h1>
         <p>{isRegistering ? 'Create an account to keep every argument and idea.' : 'Sign in to continue your conversations.'}</p>
         <form onSubmit={submit} className="auth-form">
