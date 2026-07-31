@@ -91,14 +91,57 @@ function webhookHeaders(request) {
   };
 }
 
-function subscriptionStatus(eventType, data) {
-  if (eventType === 'subscription.on_hold') return 'expired';
-  if (eventType === 'subscription.cancelled' || eventType === 'subscription.expired') return 'expired';
-  return data.status === 'active' ? 'active' : 'active';
+function subscriptionStatus(data) {
+  const status = typeof data?.status === 'string' ? data.status.toLowerCase() : '';
+  return new Set(['active', 'pending', 'on_hold', 'cancelled', 'failed', 'expired']).has(status) ? status : 'pending';
 }
 
 function timestamp(value) {
   return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : null;
+}
+
+async function syncSubscription(supabase, env, data, expectedUserId = null) {
+  const metadata = data?.metadata || {};
+  const userId = metadata.argue_user_id || metadata.user_id;
+  const plan = planForProduct(env, data?.product_id);
+  if (typeof userId !== 'string' || !plan || typeof data?.subscription_id !== 'string') {
+    throw new ApiError('The paid subscription could not be matched to this Argue AI account.', 422, null, { code: 'SUBSCRIPTION_LINK_MISSING', stage: 'billing' });
+  }
+  if (expectedUserId && userId !== expectedUserId) {
+    throw new ApiError('That subscription belongs to a different account.', 403, null, { code: 'SUBSCRIPTION_ACCOUNT_MISMATCH', stage: 'billing' });
+  }
+
+  const customer = data.customer || {};
+  const { error } = await supabase.from('subscriptions').upsert({
+    user_id: userId,
+    plan,
+    status: subscriptionStatus(data),
+    provider: 'dodo',
+    provider_customer_id: typeof data.customer_id === 'string' ? data.customer_id : (typeof customer.customer_id === 'string' ? customer.customer_id : customer.id || null),
+    provider_subscription_id: data.subscription_id,
+    current_period_start: timestamp(data.previous_billing_date || data.current_period_start || data.period_start),
+    current_period_end: timestamp(data.next_billing_date || data.current_period_end || data.period_end),
+    cancel_at_period_end: Boolean(data.cancel_at_next_billing_date),
+  }, { onConflict: 'user_id' });
+  if (error) throw error;
+  return { plan, status: subscriptionStatus(data) };
+}
+
+export async function handleDodoSubscriptionSync(request, env) {
+  const id = requestId(request);
+  const { supabase, user } = await authenticated(request, env, id, 'billing_sync');
+  const subscriptionId = new URL(request.url).searchParams.get('subscription_id') || '';
+  if (!subscriptionId) throw new ApiError('A subscription id is required after checkout.', 400, null, { code: 'SUBSCRIPTION_ID_REQUIRED', stage: 'billing_sync', requestId: id });
+
+  const apiKey = envValue(env, 'DODO_PAYMENTS_API_KEY');
+  if (!apiKey) throw new ApiError('Billing is not configured yet.', 503, null, { code: 'BILLING_NOT_CONFIGURED', stage: 'billing_sync', requestId: id });
+  const response = await fetch(`${apiBaseUrl(env)}/subscriptions/${encodeURIComponent(subscriptionId)}`, {
+    headers: { authorization: `Bearer ${apiKey}` },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new ApiError('We could not verify that subscription yet. Please try again shortly.', 502, null, { code: 'DODO_SUBSCRIPTION_LOOKUP_FAILED', stage: 'billing_sync', requestId: id });
+  const subscription = await syncSubscription(supabase, env, data, user.id);
+  return json({ subscription });
 }
 
 export async function handleDodoWebhook(request, env) {
@@ -121,22 +164,11 @@ export async function handleDodoWebhook(request, env) {
 
   const data = event?.data || {};
   if (typeof event?.type === 'string' && event.type.startsWith('subscription.')) {
-    const metadata = data.metadata || {};
-    const userId = metadata.argue_user_id || metadata.user_id;
-    const plan = planForProduct(env, data.product_id);
-    if (typeof userId === 'string' && plan && typeof data.subscription_id === 'string') {
-      const { error } = await supabase.from('subscriptions').upsert({
-        user_id: userId,
-        plan,
-        status: subscriptionStatus(event.type, data),
-        provider: 'dodo',
-        provider_customer_id: typeof data.customer_id === 'string' ? data.customer_id : null,
-        provider_subscription_id: data.subscription_id,
-        current_period_start: timestamp(data.current_period_start || data.period_start),
-        current_period_end: timestamp(data.next_billing_date || data.current_period_end || data.period_end),
-        cancel_at_period_end: Boolean(data.cancel_at_next_billing_date),
-      }, { onConflict: 'user_id' });
-      if (error) throw error;
+    try {
+      await syncSubscription(supabase, env, data);
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.code !== 'SUBSCRIPTION_LINK_MISSING') throw error;
+      console.error('Dodo subscription webhook was missing Argue AI account metadata.');
     }
   }
   return json({ received: true });

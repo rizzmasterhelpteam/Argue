@@ -477,6 +477,30 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
   }, [refreshUsage]);
 
   useEffect(() => {
+    if (!user) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('checkout') !== 'success') return;
+    const subscriptionId = params.get('subscription_id');
+    if (!subscriptionId) {
+      showNotice('Payment received. Your membership will activate as soon as Dodo confirms it.');
+      return;
+    }
+    let active = true;
+    void apiJson(`/api/billing/sync?subscription_id=${encodeURIComponent(subscriptionId)}`)
+      .then(async ({ subscription }) => {
+        if (!active) return;
+        await refreshUsage();
+        if (subscription?.status === 'active') showNotice(`${subscription.plan === 'pro' ? 'Pro' : 'Starter'} is now active.`);
+        else showNotice('Payment is processing. Your membership will activate when Dodo confirms it.');
+        const url = new URL(window.location.href);
+        ['checkout', 'subscription_id', 'payment_id', 'status', 'email', 'license_key'].forEach((key) => url.searchParams.delete(key));
+        window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+      })
+      .catch((error) => { if (active) showNotice(error.message || 'Payment is processing. Please refresh shortly.'); });
+    return () => { active = false; };
+  }, [refreshUsage, showNotice, user]);
+
+  useEffect(() => {
     if (!user || !supabase) return undefined;
     let active = true;
     supabase.from('user_preferences').select('*').eq('user_id', user.id).maybeSingle().then(({ data, error }) => {
