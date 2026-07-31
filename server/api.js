@@ -228,22 +228,23 @@ export async function handleLiveToken(request, env) {
   const model = getLiveModel(env);
   let reservation;
   try {
-    reservation = await reserveVoiceUsage(supabase, { userId: user.id, model, durationSeconds: entitlement.maxVoiceSessionSeconds });
+    reservation = await reserveVoiceUsage(supabase, { userId: user.id, model });
   } catch (error) {
-    if (String(error?.message || '').includes('VOICE_DAILY_LIMIT')) {
-      throw new ApiError('The free voice limit is 5 sessions per day. Please try again tomorrow.', 429, 3600, { code: 'VOICE_LIMIT_REACHED', stage: 'rate_limit', requestId: id });
-    }
+    const message = String(error?.message || '');
+    if (message.includes('ACTIVE_VOICE_SESSION')) throw new ApiError('You already have an active voice session. Please wait a moment.', 429, 15, { code: 'ACTIVE_VOICE_SESSION', stage: 'quota', requestId: id });
+    if (message.includes('VOICE_LIMIT_REACHED') || message.includes('ADDON_CREDITS_UNAVAILABLE')) throw new ApiError('Voice time used. Buy 30 more minutes for $5 or upgrade.', 429, 3600, { code: 'VOICE_LIMIT_REACHED', stage: 'quota', requestId: id });
     throw error;
   }
 
   try {
+    const tokenLifetimeSeconds = Math.max(1, Number(reservation.reserved_seconds) || entitlement.maxVoiceSessionSeconds);
     const tokenResponse = await fetchWithTimeout(GEMINI_AUTH_TOKEN_URL, {
       method: 'POST',
       headers: { 'x-goog-api-key': apiKey, 'content-type': 'application/json' },
       body: JSON.stringify({
         uses: 1,
-        expireTime: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-        newSessionExpireTime: new Date(Date.now() + entitlement.maxVoiceSessionSeconds * 1000).toISOString(),
+        expireTime: new Date(Date.now() + (tokenLifetimeSeconds + 15) * 1000).toISOString(),
+        newSessionExpireTime: new Date(Date.now() + tokenLifetimeSeconds * 1000).toISOString(),
         bidiGenerateContentSetup: buildLiveTokenConstraints(env, mode),
       }),
     }, LIVE_TOKEN_TIMEOUT_MS, request.signal);
@@ -265,11 +266,13 @@ export async function handleLiveToken(request, env) {
       expiresAt: tokenData.expireTime || reservation.expires_at || null,
       reservationId: reservation.reservation_id,
       mode: displayMode(mode),
-      maxSessionSeconds: entitlement.maxVoiceSessionSeconds,
-      remainingVoiceSeconds: entitlement.remainingVoiceSeconds,
+      plan: reservation.plan || entitlement.plan,
+      maxSessionSeconds: tokenLifetimeSeconds,
+      reservedSeconds: tokenLifetimeSeconds,
+      remainingVoiceSeconds: Number(reservation.remaining_voice_seconds) || 0,
     });
   } catch (error) {
-    await finishVoiceUsage(supabase, { userId: user.id, reservationId: reservation.reservation_id, durationSeconds: 0 }).catch(() => {});
+    await finishVoiceUsage(supabase, { userId: user.id, reservationId: reservation.reservation_id }).catch(() => {});
     throw error;
   }
 }
@@ -279,8 +282,8 @@ export async function handleLiveRelease(request, env) {
   const { supabase, user } = await authenticate(request, env, id, 'voice_release');
   const payload = await parseJson(request, { code: 'INVALID_ARGUMENT', stage: 'voice_release', requestId: id });
   if (typeof payload?.reservationId !== 'string' || !payload.reservationId) throw new ApiError('A voice reservation is required.', 400, null, { code: 'INVALID_ARGUMENT', stage: 'voice_release', requestId: id });
-  await finishVoiceUsage(supabase, { userId: user.id, reservationId: payload.reservationId, durationSeconds: Number(payload.durationSeconds) || 0 });
-  return json({ ok: true });
+  const result = await finishVoiceUsage(supabase, { userId: user.id, reservationId: payload.reservationId, clientDurationSeconds: Number(payload.durationSeconds) });
+  return json({ ok: true, result, usage: await getUserEntitlement(supabase, user.id) });
 }
 
 export async function handleChat(request, env) {
@@ -330,12 +333,18 @@ export async function handleChat(request, env) {
   const reply = getMessageContent(data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text);
   if (!reply) throw new ApiError('The AI returned an empty response.', 502, null, { code: 'EMPTY_AI_RESPONSE', stage: 'chat', requestId: id });
 
-  const { data: savedAssistantMessage, error: saveAssistantError } = await supabase
-    .from('messages')
-    .insert({ conversation_id: conversation.id, user_id: user.id, role: 'assistant', source: 'text', content: reply, model: usedModel })
-    .select('id,role,source,content,model,created_at')
-    .single();
-  if (saveAssistantError) throw saveAssistantError;
+  const { data: savedAssistantRows, error: saveAssistantError } = await supabase.rpc('create_text_reply', {
+    p_user_id: user.id,
+    p_conversation_id: conversation.id,
+    p_content: reply,
+    p_model: usedModel,
+  });
+  if (saveAssistantError) {
+    if (String(saveAssistantError.message || '').includes('TEXT_LIMIT_REACHED')) throw new ApiError('Monthly fair-use text limit reached. Upgrade or wait for reset.', 429, 3600, { code: 'TEXT_LIMIT_REACHED', stage: 'quota', requestId: id });
+    throw saveAssistantError;
+  }
+  const savedAssistantMessage = Array.isArray(savedAssistantRows) ? savedAssistantRows[0] : savedAssistantRows;
+  if (!savedAssistantMessage) throw new ApiError('The AI reply could not be saved.', 500, null, { code: 'TEXT_REPLY_SAVE_FAILED', stage: 'chat', requestId: id });
   await supabase.from('conversations').update({ title: input.slice(0, 80) }).eq('id', conversation.id).eq('user_id', user.id);
   await writeUsageLog(supabase, { user_id: user.id, endpoint: '/api/chat', provider: 'groq', model: usedModel, status_code: 200, latency_ms: Date.now() - startedAt, request_id: id });
   return json({ reply, conversationId: conversation.id, userMessage: responseMessage(savedUserMessage), assistantMessage: responseMessage(savedAssistantMessage) });

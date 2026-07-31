@@ -1052,6 +1052,19 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
       return;
     }
 
+    if (user) {
+      try {
+        const currentUsage = await apiJson('/api/me/usage');
+        setUsage(currentUsage);
+        if (Number(currentUsage.remainingVoiceSeconds) <= 0) {
+          showNotice('Voice time used. Buy 30 more minutes for $5 or upgrade.');
+          return;
+        }
+      } catch {
+        // The token endpoint remains authoritative if this advisory preflight cannot load.
+      }
+    }
+
     try {
       await ensureActiveConversation(mode);
     } catch (error) {
@@ -1890,7 +1903,7 @@ function ProfileScreen({ user, conversations, onOpenSettings, onAction, onUpgrad
           <span className="usage-kicker">Capacity usage</span>
           <UsageBar label="Text replies" used={usage.textRepliesUsed} limit={usage.textRepliesLimit} />
           <UsageBar label="Voice allowance" used={Math.ceil(usage.voiceSecondsUsed / 60)} limit={Math.ceil(usage.voiceSecondsLimit / 60)} suffix=" min" />
-          <UsageBar label="Voice session length" used={usage.maxVoiceSessionSeconds} limit={usage.maxVoiceSessionSeconds} suffix=" sec" />
+          <p className="usage-detail"><strong>{Math.ceil(usage.remainingVoiceSeconds / 60)} min left</strong><span>Max session: {Math.ceil(usage.maxVoiceSessionSeconds / 60)} min</span></p>
           <small>Resets {new Date(usage.billingPeriodEnd).toLocaleDateString()}</small>
         </article>
       </section>}

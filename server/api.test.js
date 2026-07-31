@@ -23,7 +23,8 @@ function createSupabaseMock({ conversationOwner = 'user-a' } = {}) {
     rpc: vi.fn(async (name, args) => {
       calls.rpc.push({ name, args });
       if (name === 'consume_rate_limit') return { data: [{ allowed: true, retry_after_seconds: 30 }], error: null };
-      if (name === 'reserve_voice_usage') return { data: [{ reservation_id: 'reservation-a', expires_at: '2026-07-30T12:01:00Z' }], error: null };
+      if (name === 'reserve_voice_usage') return { data: [{ reservation_id: 'reservation-a', expires_at: '2026-07-30T12:01:00Z', reserved_seconds: 60, remaining_voice_seconds: 60, plan: 'free' }], error: null };
+      if (name === 'create_text_reply') return { data: [{ id: `message-${++messageIndex}`, role: 'assistant', source: 'text', content: args.p_content, model: args.p_model, created_at: '2026-07-30T12:00:00Z' }], error: null };
       return { data: null, error: null };
     }),
     from(table) {
@@ -80,7 +81,7 @@ describe('authenticated Vercel API handlers', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ token: 'authTokens/test', reservationId: 'reservation-a', model: 'gemini-3.1-flash-live-preview' });
     expect(calls.rpc.map((call) => call.name)).toEqual(['consume_rate_limit', 'reserve_voice_usage']);
-    expect(calls.rpc[1].args.p_daily_limit).toBe(0);
+    expect(calls.rpc[1].args).toMatchObject({ p_user_id: 'user-a', p_model: 'gemini-3.1-flash-live-preview' });
     const requestBody = JSON.parse(upstream.mock.calls[0][1].body);
     expect(requestBody.uses).toBe(1);
     expect(requestBody.bidiGenerateContentSetup).toMatchObject({
@@ -107,7 +108,8 @@ describe('authenticated Vercel API handlers', () => {
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ reply: 'Short answer.', conversationId: 'conversation-a' });
-    expect(calls.inserts.filter((entry) => entry.table === 'messages')).toHaveLength(2);
+    expect(calls.inserts.filter((entry) => entry.table === 'messages')).toHaveLength(1);
+    expect(calls.rpc.map((call) => call.name)).toContain('create_text_reply');
   });
 
   it('denies a conversation owned by another user', async () => {
