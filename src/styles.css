@@ -914,6 +914,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .desktop-main .profile-screen { width: min(760px, 100%); }
   .desktop-main .profile-screen .profile-hero { margin-top: 30px; padding: 24px; }
   .desktop-main .profile-metrics > div { min-height: 96px; padding: 18px; }
+  .desktop-main .state-row { width: min(520px, 100%); height: 56px; min-height: 56px; margin-top: 0; padding: 5px 18px; border-radius: 12px; }
+  .desktop-main .state-item { gap: 2px; font-size: 11px; }
+  .desktop-main .state-item svg { width: 17px; height: 17px; }
+  .desktop-main .state-item:not(:last-child)::after { top: 12px; right: -16%; width: 32%; }
+  .desktop-main .state-dot { width: 5px; height: 5px; }
+  .desktop-main .voice-caption { margin-top: 4px; font-size: 11px; }
 }
 
 @media (max-width: 759px) {
