@@ -47,3 +47,9 @@ Apply it to project `sgxegggrsbbjxryknpen` only after reviewing it and configuri
 Client variables: `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, and optionally `VITE_API_BASE_URL` for native builds.
 
 Server-only variables: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`, `GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview`, `GEMINI_LIVE_VOICE=Kore`, `GROQ_API_KEY`, `GROQ_REASONING_MODEL=openai/gpt-oss-120b`, and `GROQ_FALLBACK_MODEL=openai/gpt-oss-20b`.
+
+## Dodo billing
+
+Set `DODO_PAYMENTS_API_KEY`, `DODO_PAYMENTS_WEBHOOK_KEY`, `DODO_PAYMENTS_ENVIRONMENT`, `DODO_PAYMENTS_STARTER_PRODUCT_ID`, `DODO_PAYMENTS_PRO_PRODUCT_ID`, and `APP_URL=https://argueai.vercel.app` in Vercel. `DODO_PAYMENTS_VOICE_PACK_PRODUCT_ID` is required only when selling the 30-minute voice pack.
+
+Configure this Dodo production webhook URL: `https://argueai.vercel.app/api/webhooks/dodo`. The compatible alias `https://argueai.vercel.app/api/billing/webhook` is also supported. Subscribe to subscription lifecycle events and `payment.succeeded`; the handler verifies every event signature and deduplicates by Dodo's webhook id.

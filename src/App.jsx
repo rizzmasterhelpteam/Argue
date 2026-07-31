@@ -479,7 +479,15 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
   useEffect(() => {
     if (!user) return;
     const params = new URLSearchParams(window.location.search);
-    if (params.get('checkout') !== 'success') return;
+    const checkoutState = params.get('checkout');
+    if (checkoutState === 'cancelled') {
+      showNotice('Checkout cancelled.');
+      const url = new URL(window.location.href);
+      ['checkout', 'subscription_id', 'payment_id', 'status', 'email', 'license_key'].forEach((key) => url.searchParams.delete(key));
+      window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+      return;
+    }
+    if (checkoutState !== 'success') return;
     const subscriptionId = params.get('subscription_id');
     const paymentId = params.get('payment_id');
     if (!subscriptionId && !paymentId) {
@@ -1402,6 +1410,8 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
 
   const startCheckout = async (plan) => {
     try {
+      const { data, error } = await supabase.auth.refreshSession();
+      if (error || !data.session?.access_token) throw new Error('Please sign in again before upgrading.');
       const { checkoutUrl } = await apiJson('/api/billing/checkout', {
         method: 'POST',
         body: JSON.stringify({ plan }),
@@ -1409,7 +1419,11 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
       if (!checkoutUrl) throw new Error('Checkout could not be started.');
       window.location.assign(checkoutUrl);
     } catch (error) {
-      showNotice(error.message || 'Checkout could not be started.');
+      const message = error.status === 503 ? 'Billing is not configured yet.'
+        : error.status === 502 ? 'Dodo checkout failed. Check product IDs, API key, and environment.'
+          : error.status === 401 ? 'Your login expired. Please sign in again.'
+            : error.message || 'Checkout could not be started.';
+      showNotice(message);
       throw error;
     }
   };

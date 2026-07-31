@@ -25,6 +25,10 @@ function productId(env, plan) {
   return envValue(env, plan === 'starter' ? 'DODO_PAYMENTS_STARTER_PRODUCT_ID' : 'DODO_PAYMENTS_PRO_PRODUCT_ID');
 }
 
+function voicePackProductId(env) {
+  return envValue(env, 'DODO_PAYMENTS_VOICE_PACK_PRODUCT_ID');
+}
+
 function planForProduct(env, id) {
   if (id && id === productId(env, 'starter')) return 'starter';
   if (id && id === productId(env, 'pro')) return 'pro';
@@ -39,7 +43,10 @@ function appOrigin(request, env) {
 
 async function authenticated(request, env, id, stage) {
   const result = await requireAuthenticatedUser(request, env);
-  if (result.error) throw new ApiError(result.error.message, result.error.status, null, { code: result.error.code, stage, requestId: id });
+  if (result.error) {
+    if (stage.startsWith('billing')) console.warn('Billing authentication rejected', { requestId: id, hasAuthorizationHeader: Boolean(request.headers.get('authorization')), stage });
+    throw new ApiError(result.error.message, result.error.status, null, { code: result.error.code, stage, requestId: id });
+  }
   return result;
 }
 
@@ -158,6 +165,51 @@ export async function handleDodoSubscriptionSync(request, env) {
   return json({ subscription });
 }
 
+export async function handleDodoBillingStatus(request, env) {
+  const id = requestId(request);
+  await authenticated(request, env, id, 'billing_status');
+  return json({
+    dodoApiKeyConfigured: Boolean(envValue(env, 'DODO_PAYMENTS_API_KEY')),
+    starterProductConfigured: Boolean(productId(env, 'starter')),
+    proProductConfigured: Boolean(productId(env, 'pro')),
+    voicePackProductConfigured: Boolean(voicePackProductId(env)),
+    webhookKeyConfigured: Boolean(envValue(env, 'DODO_PAYMENTS_WEBHOOK_KEY')),
+    appUrlConfigured: Boolean(envValue(env, 'APP_URL')),
+    environment: envValue(env, 'DODO_PAYMENTS_ENVIRONMENT') || 'live_mode',
+  });
+}
+
+function paymentProductId(data) {
+  return data?.product_id || data?.product_cart?.[0]?.product_id || null;
+}
+
+async function syncPaymentSucceeded(supabase, env, data) {
+  const metadata = data?.metadata || {};
+  const userId = metadata.argue_user_id || metadata.user_id;
+  const paymentId = typeof data?.payment_id === 'string' ? data.payment_id : null;
+  const product = paymentProductId(data);
+  if (product && product === voicePackProductId(env) && typeof userId === 'string' && paymentId) {
+    const { error } = await supabase.from('voice_credit_packs').upsert({
+      user_id: userId,
+      provider_purchase_id: paymentId,
+      seconds_total: 1800,
+      seconds_used: 0,
+      expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+      status: 'active',
+      metadata: { provider: 'dodo', product_id: product },
+    }, { onConflict: 'provider_purchase_id' });
+    if (error) throw error;
+    return;
+  }
+  if (typeof data?.subscription_id !== 'string') return;
+  const apiKey = envValue(env, 'DODO_PAYMENTS_API_KEY');
+  if (!apiKey) throw new ApiError('Billing is not configured yet.', 503, null, { code: 'BILLING_NOT_CONFIGURED', stage: 'webhook' });
+  const response = await fetch(`${apiBaseUrl(env)}/subscriptions/${encodeURIComponent(data.subscription_id)}`, { headers: { authorization: `Bearer ${apiKey}` } });
+  const subscription = await response.json().catch(() => ({}));
+  if (!response.ok) throw new ApiError('Dodo subscription lookup failed.', 502, null, { code: 'DODO_SUBSCRIPTION_LOOKUP_FAILED', stage: 'webhook' });
+  await syncSubscription(supabase, env, subscription);
+}
+
 export async function handleDodoWebhook(request, env) {
   const webhookKey = envValue(env, 'DODO_PAYMENTS_WEBHOOK_KEY');
   if (!webhookKey) throw new ApiError('Billing webhooks are not configured.', 503, null, { code: 'BILLING_NOT_CONFIGURED', stage: 'webhook' });
@@ -183,6 +235,13 @@ export async function handleDodoWebhook(request, env) {
     } catch (error) {
       if (!(error instanceof ApiError) || error.code !== 'SUBSCRIPTION_LINK_MISSING') throw error;
       console.error('Dodo subscription webhook was missing Argue AI account metadata.');
+    }
+  } else if (event?.type === 'payment.succeeded') {
+    try {
+      await syncPaymentSucceeded(supabase, env, data);
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.code !== 'SUBSCRIPTION_LINK_MISSING') throw error;
+      console.error('Dodo payment webhook was missing Argue AI account metadata.');
     }
   }
   return json({ received: true });

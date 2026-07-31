@@ -9,6 +9,12 @@ export async function apiJson(path, options = {}) {
       const result = forceRefresh ? await supabase.auth.refreshSession() : await supabase.auth.getSession();
       session = result.data?.session;
     }
+    if (path.startsWith('/api/billing/') && !session?.access_token) {
+      const error = new Error('Please sign in again before upgrading.');
+      error.code = 'AUTH_REQUIRED';
+      error.status = 401;
+      throw error;
+    }
     if (session?.access_token) headers.set('authorization', `Bearer ${session.access_token}`);
     const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}${path}`, { ...options, headers });
     return { response, data: await response.json().catch(() => ({})) };
