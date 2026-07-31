@@ -133,6 +133,7 @@ describe('authenticated Vercel API handlers', () => {
     });
     expect(await response.json()).toEqual({
       supabaseConfigured: true,
+      supabaseProjectRef: 'project',
       chatReady: true,
       liveReady: true,
       liveModel: 'gemini-3.1-flash-live-preview',
