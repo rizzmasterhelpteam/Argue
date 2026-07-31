@@ -890,24 +890,27 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .history-screen .new-session { width: auto; min-width: 188px; align-self: flex-end; margin-top: 16px; padding: 0 18px; border-radius: 10px; }
 
 .profile-screen { gap: 0; }
-.profile-screen .profile-hero { width: 100%; box-sizing: border-box; margin-top: 24px; padding: 20px; border-radius: 14px; border-color: #2d2f32; background: linear-gradient(115deg, rgba(255, 101, 0, .14), #111314 45%); }
-.profile-screen .profile-avatar { width: 58px; height: 58px; border: 1px solid #783916; background: #21130b; }
+.profile-screen .eyebrow { color: #96999d; }
+.profile-screen .profile-hero { width: 100%; box-sizing: border-box; margin-top: 24px; padding: 20px; border-radius: 14px; border-color: #2d2f32; background: linear-gradient(115deg, #17191b, #111314 45%); }
+.profile-screen .profile-avatar { width: 58px; height: 58px; border: 1px solid #3b3e42; color: var(--steel-icon); background: #1a1c1e; }
 .profile-screen .profile-card strong { overflow: hidden; color: #f2f3f4; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
 .profile-screen .profile-card span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-screen .profile-card button { width: 38px; height: 38px; border: 1px solid #343639; background: #17191a; }
 .profile-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; width: 100%; margin-top: 14px; }
 .profile-metrics > div { min-height: 82px; display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 14px; border: 1px solid #2a2c2f; border-radius: 12px; background: #111314; }
-.profile-metrics strong { color: var(--orange); font-size: 24px; line-height: 1; letter-spacing: 0; }
+.profile-metrics strong { color: #f1f2f3; font-size: 24px; line-height: 1; letter-spacing: 0; }
 .profile-metrics span { color: #929497; font-size: 12px; }
 .profile-section { width: 100%; margin-top: 26px; }
 .profile-section-label { display: block; margin: 0 0 8px 2px; color: #8e9093; font-size: 10px; font-weight: 700; letter-spacing: .14em; }
 .profile-screen .settings-list { margin-top: 0; border: 1px solid #2a2c2f; border-radius: 12px; overflow: hidden; background: #111314; }
 .profile-screen .settings-list button { min-height: 60px; padding: 14px 16px; border-color: #292b2e; font-size: 14px; }
 .profile-screen .settings-list button:last-child { border-bottom: 0; }
-.profile-screen .settings-list button:hover { color: #fff; background: rgba(255, 101, 0, .06); }
+.profile-screen .settings-list button svg { color: var(--steel-icon); }
+.profile-screen .settings-list button:hover { color: #fff; background: #181a1c; }
 .profile-auth-actions { width: 100%; margin-top: 22px; }
-.profile-screen .guest-cta { width: 100%; height: 50px; margin-top: 0; border-radius: 10px; }
-.profile-screen .account-delete { padding: 9px; font-size: 12px; }
+.profile-screen .guest-cta { width: 100%; height: 50px; margin-top: 0; border: 1px solid #4a4d51; border-radius: 10px; color: #f2f3f4; background: #242629; }
+.profile-screen .guest-cta:hover { background: #303236; }
+.profile-screen .account-delete { padding: 9px; color: #c98672; font-size: 12px; }
 
 @media (min-width: 900px) {
   .desktop-main .secondary-screen.history-screen, .desktop-main .secondary-screen.profile-screen { width: min(960px, 100%); padding: 42px 48px 36px; }
