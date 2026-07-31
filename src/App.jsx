@@ -1,15 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
+  CaretLeft,
   CaretRight,
   ChartLineUp,
   ChatCircleDots,
   Check,
   Clock,
   Copy,
+  Crown,
   DotsThree,
   Flame,
   GearSix,
+  Hexagon,
   Lightbulb,
   List,
   MagnifyingGlass,
@@ -1734,6 +1737,7 @@ function DesktopSidebar({ activeNav, onNavigate }) {
     <aside className="desktop-sidebar" aria-label="Desktop sidebar">
       <div className="desktop-sidebar-header">
         <div className="desktop-sidebar-brand" aria-label="Argue AI"><span>Argue</span><b>AI</b></div>
+        <button className="desktop-collapse-button" type="button" aria-label="Collapse sidebar"><CaretLeft size={19} weight="bold" /></button>
       </div>
       <nav className="desktop-sidebar-nav" aria-label="Desktop navigation">
         {items.map(({ label, icon: Icon }) => (
@@ -1743,6 +1747,22 @@ function DesktopSidebar({ activeNav, onNavigate }) {
           </button>
         ))}
       </nav>
+      <div className="desktop-sidebar-footer">
+        <div className="desktop-stat-card">
+          <span className="desktop-stat-icon"><Flame size={20} weight="fill" /></span>
+          <div><span>Daily Streak</span><strong>7 days</strong></div>
+        </div>
+        <div className="desktop-stat-card">
+          <span className="desktop-stat-icon"><Hexagon size={20} weight="regular" /></span>
+          <div><span>Total Arguments</span><strong>24</strong></div>
+        </div>
+        <div className="desktop-pro-card">
+          <Crown className="desktop-pro-crown" size={22} weight="fill" />
+          <h3>Go Pro</h3>
+          <p>Unlock unlimited arguments, advanced insights, and more.</p>
+          <button type="button" onClick={() => onNavigate('Profile')}>Upgrade</button>
+        </div>
+      </div>
     </aside>
   );
 }
