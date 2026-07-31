@@ -937,28 +937,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 
 @media (max-width: 759px) {
-  .home-screen.voice-mode .voice-zone { justify-content: center; }
-  .home-screen > .signal-wave-backdrop { top: 238px; height: 190px; opacity: .38; }
-  .voice-orbit { width: min(216px, 58vw); height: min(216px, 58vw); }
-  .voice-orbit::before { background: radial-gradient(circle, transparent 0 58%, rgba(255,110,20,.72) 58.4% 58.9%, transparent 59.3% 74%, rgba(255,110,20,.4) 74.4% 74.8%, transparent 75.2%); filter: none; opacity: .82; }
-  .voice-orbit::after { display: none; }
-  .voice-core { width: min(158px, 42vw); height: min(158px, 42vw); box-shadow: 0 12px 30px rgba(255,91,0,.24), 0 0 0 7px #161c20, 0 0 0 9px #6b361e; }
-  .voice-core::before { inset: -8px; }
-  .core-waveform { width: 38px; height: 38px; margin-bottom: 7px; }
-  .voice-core strong { font-size: 27px; }
-  .state-row { width: min(330px, 100%); margin-top: 0; padding: 7px 10px; border: 1px solid #242629; border-radius: 12px; background: rgba(12, 13, 14, .58); }
-  .state-item { gap: 3px; font-size: 11px; }
-  .state-item svg { width: 19px; height: 19px; }
-  .state-dot { width: 5px; height: 5px; }
-  .voice-caption { margin-top: 7px; font-size: 11px; }
-}
-
-@media (max-width: 420px) {
-  .voice-orbit { width: 216px; height: 216px; }
-  .voice-core { width: 158px; height: 158px; }
-}
-
-@media (max-width: 759px) {
   .secondary-screen.history-screen, .secondary-screen.profile-screen { padding: 22px 16px 16px; }
   .secondary-header h1 { font-size: 28px; }
   .history-screen .history-item { grid-template-columns: 40px minmax(0, 1fr); min-height: 0; padding: 13px; }
