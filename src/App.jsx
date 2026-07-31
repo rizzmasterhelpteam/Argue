@@ -1850,7 +1850,20 @@ function ProfileScreen({ user, conversations, onOpenSettings, onAction, onLogout
         <div><strong>{modeCounts.Argue || 0}</strong><span>Arguments</span></div>
         <div><strong>{modeCounts.Roast || 0}</strong><span>Roasts</span></div>
       </section>
-      {usage && <section className="usage-summary" aria-label="Plan usage"><div><span>{usage.plan} plan</span><strong>{usage.textRepliesUsed}/{usage.textRepliesLimit}</strong><small>text replies this month</small></div><div><span>Voice remaining</span><strong>{Math.floor(usage.remainingVoiceSeconds / 60)} min</strong><small>resets {new Date(usage.billingPeriodEnd).toLocaleDateString()}</small></div></section>}
+      {usage && <section className="usage-dashboard" aria-label="Plan usage">
+        <article className="membership-card">
+          <span className="usage-kicker">Your membership</span>
+          <strong>{usage.plan}</strong>
+          <span className="membership-status"><Check size={14} weight="bold" /> {usage.status}</span>
+        </article>
+        <article className="capacity-card">
+          <span className="usage-kicker">Capacity usage</span>
+          <UsageBar label="Text replies" used={usage.textRepliesUsed} limit={usage.textRepliesLimit} />
+          <UsageBar label="Voice allowance" used={Math.ceil(usage.voiceSecondsUsed / 60)} limit={Math.ceil(usage.voiceSecondsLimit / 60)} suffix=" min" />
+          <UsageBar label="Voice session length" used={usage.maxVoiceSessionSeconds} limit={usage.maxVoiceSessionSeconds} suffix=" sec" />
+          <small>Resets {new Date(usage.billingPeriodEnd).toLocaleDateString()}</small>
+        </article>
+      </section>}
       <section className="profile-section" aria-label="Settings">
         <span className="profile-section-label">SETTINGS</span>
         <div className="settings-list">
@@ -1866,6 +1879,13 @@ function ProfileScreen({ user, conversations, onOpenSettings, onAction, onLogout
       ) : <button className="guest-cta" type="button" onClick={() => onAction('Sign in is required in production.')}>Create an account <ArrowUp size={18} /></button>}
     </div>
   );
+}
+
+function UsageBar({ label, used, limit, suffix = '' }) {
+  const safeLimit = Math.max(1, Number(limit) || 1);
+  const safeUsed = Math.max(0, Number(used) || 0);
+  const percent = Math.min(100, (safeUsed / safeLimit) * 100);
+  return <div className="capacity-row"><div><span>{label}</span><strong>{safeUsed}{suffix} / {safeLimit}{suffix}</strong></div><span className="capacity-track" aria-label={`${label}: ${safeUsed} of ${safeLimit}`}><span style={{ width: `${percent}%` }} /></span></div>;
 }
 
 function DeleteAccountButton({ onDeleteAccount, onAction }) {
