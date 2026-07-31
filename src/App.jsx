@@ -444,6 +444,16 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
     noticeTimer.current = window.setTimeout(() => setNotice(''), 2600);
   }, []);
 
+  const refreshUsage = useCallback(async () => {
+    if (!user) return;
+
+    try {
+      setUsage(await apiJson('/api/me/usage'));
+    } catch {
+      // The dashboard is supplemental UI and should not interrupt a conversation.
+    }
+  }, [user]);
+
   const refreshConversations = useCallback(async () => {
     if (!user) return;
     setHistoryLoading(true);
@@ -461,11 +471,8 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
   }, [refreshConversations]);
 
   useEffect(() => {
-    if (!user) return undefined;
-    let active = true;
-    apiJson('/api/me/usage').then((data) => { if (active) setUsage(data); }).catch(() => {});
-    return () => { active = false; };
-  }, [user]);
+    void refreshUsage();
+  }, [refreshUsage]);
 
   useEffect(() => {
     if (!user || !supabase) return undefined;
@@ -801,7 +808,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
       void apiJson('/api/live/release', {
         method: 'POST',
         body: JSON.stringify({ reservationId, durationSeconds: reservationDuration }),
-      }).catch(() => {});
+      }).then(() => refreshUsage()).catch(() => {});
     }
     const socket = liveSocket.current;
     liveSocket.current = null;
@@ -818,7 +825,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
     setPlayingMessageId(null);
     setVoicePhase('stopped');
     if (announce) showNotice('Voice session stopped.');
-  }, [clearLiveTimeouts, closeLiveOutputContext, showNotice, stopLiveMicrophone, user]);
+  }, [clearLiveTimeouts, closeLiveOutputContext, refreshUsage, showNotice, stopLiveMicrophone, user]);
 
   stopLiveSessionRef.current = stopLiveSession;
 
@@ -1258,6 +1265,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
       } else {
         setMessages((current) => [...current, { id: createId('text-ai'), role: 'assistant', time: getCurrentTime(), text: response.reply }]);
       }
+      await refreshUsage();
     } catch (error) {
       showNotice(error.message);
     } finally {
@@ -1356,6 +1364,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
     if (destination !== activeNav && !['idle', 'stopped'].includes(voicePhase)) stopConversation(false);
     stopSpeechPlayback();
     setPlayingMessageId(null);
+    if (destination === 'Profile') void refreshUsage();
     setActiveNav(destination);
   };
 
