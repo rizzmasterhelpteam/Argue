@@ -377,7 +377,7 @@ function messageFromApi(message) {
 }
 
 export function App({ user = null, onLogout, onDeleteAccount }) {
-  const [showSplash, setShowSplash] = useState(() => import.meta.env.MODE !== 'test' && !window.sessionStorage.getItem('argue-ai-splash-seen'));
+  const [showSplash, setShowSplash] = useState(() => import.meta.env.MODE !== 'test');
   const [mode, setMode] = useState('Argue');
   const [inputMode, setInputMode] = useState('voice');
   const [activeNav, setActiveNav] = useState('Argue');
@@ -430,10 +430,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
   useEffect(() => {
     if (!showSplash) return undefined;
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || loadSettings().reducedMotion;
-    const timer = window.setTimeout(() => {
-      window.sessionStorage.setItem('argue-ai-splash-seen', 'true');
-      setShowSplash(false);
-    }, reducedMotion ? 0 : 550);
+    const timer = window.setTimeout(() => setShowSplash(false), reducedMotion ? 250 : 4200);
     return () => window.clearTimeout(timer);
   }, [showSplash]);
 
