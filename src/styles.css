@@ -929,10 +929,31 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .capacity-track > span { display: block; height: 100%; min-width: 3px; border-radius: inherit; background: var(--orange); }
 .billing-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; margin-top: 14px; padding: 16px 18px; border: 1px solid #2d3033; border-radius: 12px; background: #111314; }
 .billing-actions strong { display: block; margin-top: 6px; color: #f1f2f3; font-size: 15px; }
-.billing-actions > div:last-child { display: flex; gap: 8px; }
 .billing-actions button { min-width: 96px; min-height: 38px; padding: 0 14px; border: 1px solid #4b4e51; border-radius: 8px; background: transparent; color: #f1f2f3; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
 .billing-actions .billing-pro-button { border-color: #d85c0a; background: #e8650b; color: #101010; }
 .billing-actions button:disabled { cursor: wait; opacity: .68; }
+.pricing-backdrop { position: fixed; z-index: 60; inset: 0; display: grid; place-items: center; padding: 22px; background: rgba(3, 4, 5, .82); backdrop-filter: blur(10px); }
+.pricing-modal { position: relative; width: min(980px, 100%); max-height: min(780px, calc(100dvh - 44px)); overflow: auto; padding: 34px; border: 1px solid #36393c; border-radius: 14px; background: #0e1011; box-shadow: 0 28px 80px rgba(0, 0, 0, .6); }
+.pricing-modal > header { padding-right: 46px; text-align: center; }
+.pricing-modal h2 { margin: 9px 0 7px; color: #f5f6f7; font-size: 32px; line-height: 1.1; }
+.pricing-modal header p { margin: 0; color: #a8aaad; font-size: 14px; }
+.pricing-close { position: absolute; top: 18px; right: 18px; display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid #383b3e; border-radius: 8px; color: #c6c9cc; background: #17191b; cursor: pointer; }
+.pricing-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 28px; }
+.pricing-plan { display: flex; min-height: 330px; flex-direction: column; padding: 20px; border: 1px solid #303336; border-radius: 10px; background: #141617; }
+.pricing-plan.featured { border-color: #b65115; background: linear-gradient(155deg, rgba(168, 72, 18, .17), #141617 38%); box-shadow: inset 0 1px 0 rgba(255, 151, 79, .18); }
+.pricing-plan.current { border-color: #4a6e62; }
+.pricing-plan-top { display: flex; min-height: 24px; align-items: center; justify-content: space-between; color: #9ba1a5; }
+.pricing-plan.featured .pricing-plan-top { color: #ef862f; }
+.pricing-plan-top small { padding: 3px 7px; border: 1px solid #7b3b18; border-radius: 999px; color: #f39a4d; font-size: 10px; font-weight: 700; }
+.pricing-plan h3 { margin: 18px 0 5px; color: #f4f5f6; font-size: 22px; }
+.pricing-plan > p { min-height: 38px; margin: 0; color: #a6a9ac; font-size: 13px; line-height: 1.45; }
+.pricing-plan ul { display: grid; gap: 10px; margin: 23px 0; padding: 0; list-style: none; color: #d3d5d7; font-size: 12px; }
+.pricing-plan li { display: flex; align-items: flex-start; gap: 7px; line-height: 1.35; }
+.pricing-plan li svg { flex: 0 0 auto; margin-top: 1px; color: #8dbca5; }
+.pricing-plan button { min-height: 42px; margin-top: auto; border: 1px solid #4a4d50; border-radius: 8px; color: #edf0f1; background: #202225; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.pricing-plan.featured button { border-color: #df6517; color: #17110d; background: #ec721e; }
+.pricing-plan button:disabled { cursor: default; opacity: .58; }
+.pricing-modal footer { margin-top: 18px; color: #777b7f; font-size: 11px; text-align: center; }
 .capacity-card > small { margin-top: auto; color: #797c80; font-size: 11px; }
 .profile-section { width: 100%; margin-top: 26px; }
 .profile-section-label { display: block; margin: 0 0 8px 2px; color: #8e9093; font-size: 10px; font-weight: 700; letter-spacing: .14em; }
@@ -991,6 +1012,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .membership-card > strong { margin-top: 22px; }
   .membership-status { margin-top: 18px; }
   .billing-actions { align-items: flex-start; flex-direction: column; }
-  .billing-actions > div:last-child { width: 100%; }
-  .billing-actions button { flex: 1; }
+  .billing-actions button { width: 100%; }
+  .pricing-backdrop { align-items: end; padding: 0; }
+  .pricing-modal { width: 100%; max-height: min(760px, calc(100dvh - 18px)); padding: 26px 16px 20px; border-bottom: 0; border-radius: 14px 14px 0 0; }
+  .pricing-modal h2 { font-size: 27px; }
+  .pricing-grid { grid-template-columns: 1fr; gap: 10px; }
+  .pricing-plan { min-height: 0; padding: 16px; }
+  .pricing-plan h3 { margin-top: 11px; }
+  .pricing-plan > p { min-height: 0; }
+  .pricing-plan ul { margin: 15px 0; }
 }

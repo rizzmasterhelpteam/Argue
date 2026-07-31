@@ -30,6 +30,7 @@ import {
 } from '@phosphor-icons/react';
 import { apiJson } from './lib/apiClient';
 import { supabase } from './lib/supabase';
+import { PricingModal } from './components/PricingModal';
 import {
   createConversation,
   getMessages,
@@ -401,6 +402,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
   const [playingMessageId, setPlayingMessageId] = useState(null);
   const [notice, setNotice] = useState('');
   const [usage, setUsage] = useState(null);
+  const [pricingOpen, setPricingOpen] = useState(false);
   const liveSocket = useRef(null);
   const stopLiveSessionRef = useRef(null);
   const liveStream = useRef(null);
@@ -1373,6 +1375,8 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
     }
   };
 
+  const openPricing = () => setPricingOpen(true);
+
   const navigate = (destination) => {
     haptic();
     if (destination !== activeNav && !['idle', 'stopped'].includes(voicePhase)) stopConversation(false);
@@ -1417,7 +1421,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
       <section className="device-frame" aria-label="Argue AI responsive workspace">
         <div className="device-screen">
           <div className="desktop-layout">
-            <DesktopSidebar activeNav={activeNav} onNavigate={navigate} />
+            <DesktopSidebar activeNav={activeNav} onNavigate={navigate} onUpgrade={openPricing} />
             <div className="desktop-main">
               <div className="app-content">
                 {activeNav === 'Argue' && (
@@ -1458,7 +1462,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
                     conversations={conversations}
                     onOpenSettings={openSettings}
                     onAction={showNotice}
-                    onCheckout={startCheckout}
+                    onUpgrade={openPricing}
                     onLogout={onLogout}
                     onDeleteAccount={onDeleteAccount}
                     usage={usage}
@@ -1483,6 +1487,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
       )}
       {notice && <div className="app-toast" role="status">{notice}</div>}
       </main>
+      {pricingOpen && <PricingModal usage={usage} onClose={() => setPricingOpen(false)} onCheckout={startCheckout} />}
     </>
   );
 }
@@ -1763,7 +1768,7 @@ function BottomNav({ activeNav, onNavigate }) {
   );
 }
 
-function DesktopSidebar({ activeNav, onNavigate }) {
+function DesktopSidebar({ activeNav, onNavigate, onUpgrade }) {
   const items = [
     { label: 'Argue', icon: ChatCircleDots },
     { label: 'History', icon: Clock },
@@ -1797,7 +1802,7 @@ function DesktopSidebar({ activeNav, onNavigate }) {
           <Crown className="desktop-pro-crown" size={22} weight="fill" />
           <h3>Go Pro</h3>
           <p>Unlock unlimited arguments, advanced insights, and more.</p>
-          <button type="button" onClick={() => onNavigate('Profile')}>Upgrade</button>
+          <button type="button" onClick={onUpgrade}>Upgrade</button>
         </div>
       </div>
     </aside>
@@ -1851,8 +1856,7 @@ function HistoryScreen({ conversations, loading, onOpenConversation, onStartNew 
   );
 }
 
-function ProfileScreen({ user, conversations, onOpenSettings, onAction, onCheckout, onLogout, onDeleteAccount, usage }) {
-  const [checkoutPlan, setCheckoutPlan] = useState('');
+function ProfileScreen({ user, conversations, onOpenSettings, onAction, onUpgrade, onLogout, onDeleteAccount, usage }) {
   const currentPlan = usage?.plan || 'free';
   const modeCounts = conversations.reduce((counts, conversation) => ({
     ...counts,
@@ -1891,11 +1895,8 @@ function ProfileScreen({ user, conversations, onOpenSettings, onAction, onChecko
         </article>
       </section>}
       {currentPlan !== 'pro' && <section className="billing-actions" aria-label="Upgrade plan">
-        <div><span className="usage-kicker">Upgrade</span><strong>More room to make your case.</strong></div>
-        <div>
-          {currentPlan === 'free' && <button type="button" disabled={Boolean(checkoutPlan)} onClick={async () => { setCheckoutPlan('starter'); try { await onCheckout('starter'); } catch { setCheckoutPlan(''); } }}>Starter</button>}
-          <button type="button" className="billing-pro-button" disabled={Boolean(checkoutPlan)} onClick={async () => { setCheckoutPlan('pro'); try { await onCheckout('pro'); } catch { setCheckoutPlan(''); } }}>{checkoutPlan === 'pro' ? 'Opening checkout...' : 'Go Pro'}</button>
-        </div>
+        <div><span className="usage-kicker">Membership</span><strong>Choose the plan that fits your pace.</strong></div>
+        <button type="button" className="billing-pro-button" onClick={onUpgrade}>View plans</button>
       </section>}
       <section className="profile-section" aria-label="Settings">
         <span className="profile-section-label">SETTINGS</span>
