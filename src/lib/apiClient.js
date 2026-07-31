@@ -17,7 +17,6 @@ export async function apiJson(path, options = {}) {
   let { response, data } = await request();
   if (response.status === 401 && data.code === 'INVALID_SESSION' && supabase) {
     ({ response, data } = await request(true));
-    if (response.status === 401) await supabase.auth.signOut({ scope: 'local' });
   }
   if (!response.ok) {
     const error = new Error(data.error || 'The AI service is unavailable right now.');

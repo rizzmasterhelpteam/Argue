@@ -377,8 +377,10 @@ export async function handleDeleteAccount(request, env) {
 }
 
 export function handleStatus(_request, env) {
+  const supabaseUrl = envValue(env, 'SUPABASE_URL') || envValue(env, 'VITE_SUPABASE_URL');
   return json({
-    supabaseConfigured: Boolean((envValue(env, 'SUPABASE_URL') || envValue(env, 'VITE_SUPABASE_URL')) && envValue(env, 'SUPABASE_SERVICE_ROLE_KEY')),
+    supabaseConfigured: Boolean(supabaseUrl && envValue(env, 'SUPABASE_SERVICE_ROLE_KEY')),
+    supabaseProjectRef: (() => { try { return new URL(supabaseUrl).hostname.split('.')[0] || null; } catch { return null; } })(),
     chatReady: Boolean(envValue(env, 'GROQ_API_KEY')),
     liveReady: Boolean(getGeminiApiKey(env)),
     liveModel: getLiveModel(env),
