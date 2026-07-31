@@ -135,23 +135,23 @@ describe('Argue AI', () => {
   it('switches between Argue and Brainstorm modes', () => {
     render(<App />);
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Brainstorm' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Brainstorm' }));
 
-    expect(screen.getByText('Build the idea.')).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Brainstorm' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Strengthen the idea.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Brainstorm' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('BRAINSTORM')).toBeInTheDocument();
   });
 
   it('switches between voice and text input modes', () => {
     render(<App />);
 
-    expect(screen.getByRole('tab', { name: 'Voice input' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('button', { name: 'Voice input' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('region', { name: 'Voice conversation control' })).toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: 'Add your argument' })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Text input' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Text input' }));
 
-    expect(screen.getByRole('tab', { name: 'Text input' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('button', { name: 'Text input' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('textbox', { name: 'Add your argument' })).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Voice conversation control' })).not.toBeInTheDocument();
   });
@@ -161,7 +161,7 @@ describe('Argue AI', () => {
 
     expect(screen.queryByRole('region', { name: 'Conversation transcript' })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Text input' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Text input' }));
 
     expect(screen.getByRole('region', { name: 'Conversation transcript' })).toBeInTheDocument();
     expect(screen.getByText('Remote work makes people more productive.')).toBeInTheDocument();
@@ -169,7 +169,7 @@ describe('Argue AI', () => {
 
   it('sends text to Groq and adds the returned assistant response', async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole('tab', { name: 'Text input' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Text input' }));
     const input = screen.getByRole('textbox', { name: 'Add your argument' });
 
     fireEvent.change(input, { target: { value: 'Cities should ban private cars.' } });
@@ -216,7 +216,7 @@ describe('Argue AI', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Stop voice session' }));
       await flushPromises();
     });
-    fireEvent.click(screen.getByRole('tab', { name: 'Text input' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Text input' }));
     expect(screen.getByText('AI will replace most creative jobs within five years.')).toBeInTheDocument();
     expect(screen.getByText('That claim needs evidence.')).toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith('/api/live/token', expect.objectContaining({ method: 'POST' }));
@@ -227,16 +227,16 @@ describe('Argue AI', () => {
   it('switches to Roast mode from the three-way mode control', () => {
     render(<App />);
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Roast' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Roast' }));
 
-    expect(screen.getByRole('tab', { name: 'Roast' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByText('Bring the take. Take the heat.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Roast' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Expose the flaw - with humor.')).toBeInTheDocument();
   });
 
   it('groups the text transcript and composer into the responsive workspace', () => {
     render(<App />);
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Text input' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Text input' }));
 
     const workspace = document.querySelector('.text-workspace');
     expect(workspace).not.toBeNull();

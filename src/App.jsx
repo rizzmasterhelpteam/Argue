@@ -1,18 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
-  CaretLeft,
   CaretRight,
   ChartLineUp,
   ChatCircleDots,
   Check,
   Clock,
   Copy,
-  Crown,
   DotsThree,
   Flame,
   GearSix,
-  Hexagon,
   Lightbulb,
   List,
   MagnifyingGlass,
@@ -20,9 +17,7 @@ import {
   Pause,
   Play,
   Plus,
-  SlidersHorizontal,
   Sparkle,
-  SpeakerHigh,
   ShieldCheck,
   Target,
   TextT,
@@ -41,6 +36,7 @@ import {
 
 const SETTINGS_KEY = 'argue-ai-settings';
 const SETTINGS_VERSION = 2;
+const SHOW_DEMO_DATA = import.meta.env.MODE === 'test';
 const VOICE_PLAYBACK_RATE = 1.5;
 const LIVE_INPUT_SAMPLE_RATE = 16000;
 const LIVE_OUTPUT_SAMPLE_RATE = 24000;
@@ -381,7 +377,7 @@ function messageFromApi(message) {
 }
 
 export function App({ user = null, onLogout, onDeleteAccount }) {
-  const [showSplash, setShowSplash] = useState(() => import.meta.env.MODE !== 'test');
+  const [showSplash, setShowSplash] = useState(() => import.meta.env.MODE !== 'test' && !window.sessionStorage.getItem('argue-ai-splash-seen'));
   const [mode, setMode] = useState('Argue');
   const [inputMode, setInputMode] = useState('voice');
   const [activeNav, setActiveNav] = useState('Argue');
@@ -390,8 +386,8 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
   const [lastVoiceError, setLastVoiceError] = useState('');
   const [hasPendingAudio, setHasPendingAudio] = useState(false);
   const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
-  const [messages, setMessages] = useState(() => (user ? [] : initialMessages));
-  const [conversations, setConversations] = useState(() => (user ? [] : historyItems));
+  const [messages, setMessages] = useState(() => (!user && SHOW_DEMO_DATA ? initialMessages : []));
+  const [conversations, setConversations] = useState(() => (!user && SHOW_DEMO_DATA ? historyItems : []));
   const [activeConversationId, setActiveConversationId] = useState(null);
   const [historyLoading, setHistoryLoading] = useState(Boolean(user));
   const [draft, setDraft] = useState('');
@@ -434,7 +430,10 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
   useEffect(() => {
     if (!showSplash) return undefined;
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || loadSettings().reducedMotion;
-    const timer = window.setTimeout(() => setShowSplash(false), reducedMotion ? 250 : 4200);
+    const timer = window.setTimeout(() => {
+      window.sessionStorage.setItem('argue-ai-splash-seen', 'true');
+      setShowSplash(false);
+    }, reducedMotion ? 0 : 550);
     return () => window.clearTimeout(timer);
   }, [showSplash]);
 
@@ -518,13 +517,7 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
     setLastVoiceError(message);
     setVoicePhase('error');
     voiceDebug('error', { phase: stage, message, name: error?.name || 'Error' });
-    showNotice(message);
-    if (voiceStatusTimer.current) window.clearTimeout(voiceStatusTimer.current);
-    voiceStatusTimer.current = window.setTimeout(() => {
-      voiceStatusTimer.current = null;
-      setVoicePhase('idle');
-    }, 2200);
-  }, [showNotice, voicePhase]);
+  }, [voicePhase]);
 
   useEffect(() => {
     if (!VOICE_PHASES.includes(voicePhase)) return;
@@ -1229,11 +1222,12 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
   const sendDraft = async (event) => {
     event?.preventDefault();
     const value = draft.trim();
-    if (!value || !['idle', 'stopped'].includes(voicePhase)) return;
+    if (!value || !['idle', 'stopped', 'error'].includes(voicePhase)) return;
 
     haptic();
     const sessionMode = mode;
     setDraft('');
+    setLastVoiceError('');
     setVoicePhase('thinking');
 
     try {
@@ -1405,7 +1399,6 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
                     playPendingResponse={playPendingResponse}
                     startVoiceSession={startVoiceSession}
                     messages={messages}
-                    messageLimit={settings.compactTranscript ? 2 : 4}
                     draft={draft}
                     setDraft={setDraft}
                     sendDraft={sendDraft}
@@ -1439,7 +1432,6 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
               <BottomNav activeNav={activeNav} onNavigate={navigate} />
             </div>
           </div>
-          <div className="home-indicator" aria-hidden="true" />
         </div>
       </section>
 
@@ -1458,13 +1450,13 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
   );
 }
 
-function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, voicePhase, lastVoiceError, hasPendingAudio, audioPlaybackBlocked, playPendingResponse, startVoiceSession, messages, messageLimit, draft, setDraft, sendDraft, copyMessage, copiedId, playingMessageId, replayMessage, openSettings }) {
+function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, voicePhase, lastVoiceError, hasPendingAudio, audioPlaybackBlocked, playPendingResponse, startVoiceSession, messages, draft, setDraft, sendDraft, copyMessage, copiedId, playingMessageId, replayMessage, openSettings }) {
   const activeState = voiceUiStateForPhase(voicePhase);
   const isBusy = !['idle', 'stopped', 'error'].includes(voicePhase);
   const debugEnabled = new URLSearchParams(window.location.search).get('voiceDebug') === '1';
   const transcriptRef = useRef(null);
   const inputRef = useRef(null);
-  const visibleMessages = messages.slice(-messageLimit);
+  const visibleMessages = messages;
   const liveMessages = messages.filter((message) => message.id.startsWith('live-')).slice(-2);
   const buttonText = voicePhase === 'error' ? voiceButtonLabels.error : isBusy ? voiceButtonLabels[voiceState] : mode.toUpperCase();
   const compactButtonText = buttonText.length > 8;
@@ -1512,30 +1504,30 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, voiceP
         </button>
       </header>
 
-      <div className="mode-switcher" role="tablist" aria-label="Conversation mode">
-        <button className={mode === 'Argue' ? 'mode-tab active' : 'mode-tab'} disabled={isBusy} onClick={() => setMode('Argue')} role="tab" aria-selected={mode === 'Argue'} type="button">
+      <div className="mode-switcher" role="group" aria-label="Conversation mode">
+        <button className={mode === 'Argue' ? 'mode-tab active' : 'mode-tab'} disabled={isBusy} onClick={() => setMode('Argue')} aria-pressed={mode === 'Argue'} type="button">
           <ChatCircleDots size={27} weight="regular" />
           <span>Argue</span>
         </button>
-        <button className={mode === 'Brainstorm' ? 'mode-tab active' : 'mode-tab'} disabled={isBusy} onClick={() => setMode('Brainstorm')} role="tab" aria-selected={mode === 'Brainstorm'} type="button">
+        <button className={mode === 'Brainstorm' ? 'mode-tab active' : 'mode-tab'} disabled={isBusy} onClick={() => setMode('Brainstorm')} aria-pressed={mode === 'Brainstorm'} type="button">
           <Lightbulb size={26} weight="regular" />
           <span>Brainstorm</span>
         </button>
-        <button className={mode === 'Roast' ? 'mode-tab active roast-tab' : 'mode-tab roast-tab'} disabled={isBusy} onClick={() => setMode('Roast')} role="tab" aria-selected={mode === 'Roast'} type="button">
+        <button className={mode === 'Roast' ? 'mode-tab active roast-tab' : 'mode-tab roast-tab'} disabled={isBusy} onClick={() => setMode('Roast')} aria-pressed={mode === 'Roast'} type="button">
           <Flame size={26} weight="fill" />
           <span>Roast</span>
         </button>
       </div>
 
-      <p className="tagline">{mode === 'Argue' ? 'Make the case.' : mode === 'Brainstorm' ? 'Build the idea.' : 'Bring the take. Take the heat.'}</p>
+      <p className="tagline">{mode === 'Argue' ? 'Challenge the claim.' : mode === 'Brainstorm' ? 'Strengthen the idea.' : 'Expose the flaw - with humor.'}</p>
       <p className="desktop-subtitle">Argue your point. Defend your ideas. Win the discussion.</p>
 
-      <div className="input-mode-switcher" role="tablist" aria-label="Input mode">
-        <button className={inputMode === 'voice' ? 'input-mode-tab active' : 'input-mode-tab'} disabled={isBusy} onClick={() => setInputMode('voice')} role="tab" aria-selected={inputMode === 'voice'} aria-label="Voice input" type="button">
+      <div className="input-mode-switcher" role="group" aria-label="Input mode">
+        <button className={inputMode === 'voice' ? 'input-mode-tab active' : 'input-mode-tab'} disabled={isBusy} onClick={() => setInputMode('voice')} aria-pressed={inputMode === 'voice'} aria-label="Voice input" type="button">
           <Microphone size={17} weight="bold" />
           <span>Voice</span>
         </button>
-        <button className={inputMode === 'text' ? 'input-mode-tab active' : 'input-mode-tab'} disabled={isBusy} onClick={() => setInputMode('text')} role="tab" aria-selected={inputMode === 'text'} aria-label="Text input" type="button">
+        <button className={inputMode === 'text' ? 'input-mode-tab active' : 'input-mode-tab'} disabled={isBusy} onClick={() => setInputMode('text')} aria-pressed={inputMode === 'text'} aria-label="Text input" type="button">
           <TextT size={18} weight="bold" />
           <span>Text</span>
         </button>
@@ -1556,6 +1548,12 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, voiceP
             <StateItem icon={<Waveform size={24} weight="bold" />} label="Speaking" active={activeState === 'speaking'} />
           </div>
           <p className="voice-caption">{voicePhase === 'error' && lastVoiceError ? lastVoiceError : voiceStatusCopy[voiceState]}</p>
+          {voicePhase === 'error' && (
+            <div className="voice-error-card" role="alert">
+              <strong>Voice session needs attention</strong>
+              <div><button type="button" onClick={startVoiceSession}>Retry</button><button type="button" onClick={() => setInputMode('text')}>Continue in text</button></div>
+            </div>
+          )}
           {(liveMessages.length > 0 || hasPendingAudio || audioPlaybackBlocked) && (
             <div className="live-transcript" aria-label="Live voice transcript">
               {liveMessages.map((message) => <p key={message.id}><strong>{message.role === 'user' ? 'YOU' : 'ARGUE AI'}</strong> {message.text}</p>)}
@@ -1593,7 +1591,10 @@ function HomeScreen({ mode, setMode, inputMode, setInputMode, voiceState, voiceP
               )) : (
                 <div className="empty-transcript">
                   <ChatCircleDots size={25} />
-                  <p>Your next argument will appear here.</p>
+                  <p>{mode === 'Argue' ? 'Pick a claim and make your case.' : mode === 'Brainstorm' ? 'Start with an idea worth improving.' : 'Bring a plan that can take a joke.'}</p>
+                  <div className="starter-prompts" aria-label="Starter prompts">
+                    {(mode === 'Argue' ? ['Remote work is better for productivity.', 'College is still worth the cost.'] : mode === 'Brainstorm' ? ['Help me improve my app idea.', 'Find a better target audience.'] : ['Roast my startup idea.', 'Find the weakest part of my argument.']).map((prompt) => <button key={prompt} type="button" onClick={() => setDraft(prompt)}>{prompt}</button>)}
+                  </div>
                 </div>
               )}
             </div>
@@ -1736,7 +1737,6 @@ function DesktopSidebar({ activeNav, onNavigate }) {
     <aside className="desktop-sidebar" aria-label="Desktop sidebar">
       <div className="desktop-sidebar-header">
         <div className="desktop-sidebar-brand" aria-label="Argue AI"><span>Argue</span><b>AI</b></div>
-        <button className="desktop-collapse-button" type="button" aria-label="Collapse sidebar"><CaretLeft size={19} weight="bold" /></button>
       </div>
       <nav className="desktop-sidebar-nav" aria-label="Desktop navigation">
         {items.map(({ label, icon: Icon }) => (
@@ -1746,22 +1746,6 @@ function DesktopSidebar({ activeNav, onNavigate }) {
           </button>
         ))}
       </nav>
-      <div className="desktop-sidebar-footer">
-        <div className="desktop-stat-card">
-          <span className="desktop-stat-icon"><Flame size={20} weight="fill" /></span>
-          <div><span>Daily Streak</span><strong>7 days</strong></div>
-        </div>
-        <div className="desktop-stat-card">
-          <span className="desktop-stat-icon"><Hexagon size={20} weight="regular" /></span>
-          <div><span>Total Arguments</span><strong>24</strong></div>
-        </div>
-        <div className="desktop-pro-card">
-          <Crown className="desktop-pro-crown" size={22} weight="fill" />
-          <h3>Go Pro</h3>
-          <p>Unlock unlimited arguments, advanced insights, and more.</p>
-          <button type="button" onClick={() => onNavigate('Profile')}>Upgrade</button>
-        </div>
-      </div>
     </aside>
   );
 }
@@ -1830,7 +1814,6 @@ function ProfileScreen({ user, conversations, onOpenSettings, onAction, onLogout
       <section className="profile-card profile-hero">
         <div className="profile-avatar" aria-hidden="true"><UserCircle size={49} weight="fill" /></div>
         <div><strong>{displayName}</strong><span>{accountLabel}</span></div>
-        <button type="button" aria-label="Edit profile" onClick={() => onAction('Profile editing is not connected in this prototype.')}><SlidersHorizontal size={19} /></button>
       </section>
       <section className="profile-metrics" aria-label="Conversation statistics">
         <div><strong>{conversations.length}</strong><span>Conversations</span></div>
@@ -1842,19 +1825,27 @@ function ProfileScreen({ user, conversations, onOpenSettings, onAction, onLogout
         <div className="settings-list">
         <button type="button" onClick={() => onOpenSettings('voice')}><Waveform size={21} /><span>Voice settings</span><CaretRight size={17} /></button>
         <button type="button" onClick={() => onOpenSettings('app')}><GearSix size={21} /><span>App preferences</span><CaretRight size={17} /></button>
-        <button type="button" onClick={() => onAction('Support: hello@argue.ai')}><SpeakerHigh size={21} /><span>Feedback & support</span><CaretRight size={17} /></button>
         </div>
       </section>
       {user ? (
         <div className="profile-auth-actions">
           <button className="guest-cta" type="button" onClick={() => onLogout?.().catch((error) => onAction(error.message))}>Log out</button>
-          <button className="account-delete" type="button" onClick={() => {
-            if (window.confirm('Delete your Argue AI account and its conversations? This cannot be undone.')) onDeleteAccount?.().catch((error) => onAction(error.message));
-          }}>Delete account</button>
+          <DeleteAccountButton onDeleteAccount={onDeleteAccount} onAction={onAction} />
         </div>
       ) : <button className="guest-cta" type="button" onClick={() => onAction('Sign in is required in production.')}>Create an account <ArrowUp size={18} /></button>}
     </div>
   );
+}
+
+function DeleteAccountButton({ onDeleteAccount, onAction }) {
+  const [open, setOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const confirmDelete = async () => {
+    setDeleting(true);
+    try { await onDeleteAccount?.(); } catch (error) { onAction(error.message || 'Account deletion failed.'); setDeleting(false); return; }
+    setOpen(false);
+  };
+  return <><button className="account-delete" type="button" onClick={() => setOpen(true)}>Delete account</button>{open && <div className="delete-dialog-backdrop" role="presentation"><section className="delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-account-title"><h2 id="delete-account-title">Delete account?</h2><p>This permanently deletes your Argue AI account and saved conversations. This cannot be undone.</p><div><button type="button" onClick={() => setOpen(false)} disabled={deleting}>Cancel</button><button type="button" className="account-delete" onClick={confirmDelete} disabled={deleting}>{deleting ? 'Deleting...' : 'Delete account'}</button></div></section></div>}</>;
 }
 
 function SettingsSheet({ section, settings, onChange, onResetVoiceSettings, onClose }) {
