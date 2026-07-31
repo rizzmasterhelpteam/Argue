@@ -100,14 +100,17 @@ function timestamp(value) {
   return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : null;
 }
 
-async function syncSubscription(supabase, env, data, expectedUserId = null) {
+async function syncSubscription(supabase, env, data, expectedUser = null) {
   const metadata = data?.metadata || {};
-  const userId = metadata.argue_user_id || metadata.user_id;
+  let userId = metadata.argue_user_id || metadata.user_id;
   const plan = planForProduct(env, data?.product_id);
+  if (!userId && expectedUser && typeof data?.customer?.email === 'string' && data.customer.email.toLowerCase() === expectedUser.email?.toLowerCase()) {
+    userId = expectedUser.id;
+  }
   if (typeof userId !== 'string' || !plan || typeof data?.subscription_id !== 'string') {
     throw new ApiError('The paid subscription could not be matched to this Argue AI account.', 422, null, { code: 'SUBSCRIPTION_LINK_MISSING', stage: 'billing' });
   }
-  if (expectedUserId && userId !== expectedUserId) {
+  if (expectedUser && userId !== expectedUser.id) {
     throw new ApiError('That subscription belongs to a different account.', 403, null, { code: 'SUBSCRIPTION_ACCOUNT_MISMATCH', stage: 'billing' });
   }
 
@@ -130,17 +133,28 @@ async function syncSubscription(supabase, env, data, expectedUserId = null) {
 export async function handleDodoSubscriptionSync(request, env) {
   const id = requestId(request);
   const { supabase, user } = await authenticated(request, env, id, 'billing_sync');
-  const subscriptionId = new URL(request.url).searchParams.get('subscription_id') || '';
-  if (!subscriptionId) throw new ApiError('A subscription id is required after checkout.', 400, null, { code: 'SUBSCRIPTION_ID_REQUIRED', stage: 'billing_sync', requestId: id });
+  const url = new URL(request.url);
+  let subscriptionId = url.searchParams.get('subscription_id') || '';
+  const paymentId = url.searchParams.get('payment_id') || '';
+  if (!subscriptionId && !paymentId) throw new ApiError('A payment or subscription id is required after checkout.', 400, null, { code: 'CHECKOUT_ID_REQUIRED', stage: 'billing_sync', requestId: id });
 
   const apiKey = envValue(env, 'DODO_PAYMENTS_API_KEY');
   if (!apiKey) throw new ApiError('Billing is not configured yet.', 503, null, { code: 'BILLING_NOT_CONFIGURED', stage: 'billing_sync', requestId: id });
-  const response = await fetch(`${apiBaseUrl(env)}/subscriptions/${encodeURIComponent(subscriptionId)}`, {
-    headers: { authorization: `Bearer ${apiKey}` },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new ApiError('We could not verify that subscription yet. Please try again shortly.', 502, null, { code: 'DODO_SUBSCRIPTION_LOOKUP_FAILED', stage: 'billing_sync', requestId: id });
-  const subscription = await syncSubscription(supabase, env, data, user.id);
+  const getDodo = async (path) => {
+    const response = await fetch(`${apiBaseUrl(env)}${path}`, {
+      headers: { authorization: `Bearer ${apiKey}` },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new ApiError('We could not verify that purchase yet. Please try again shortly.', 502, null, { code: 'DODO_PURCHASE_LOOKUP_FAILED', stage: 'billing_sync', requestId: id });
+    return data;
+  };
+  if (!subscriptionId) {
+    const payment = await getDodo(`/payments/${encodeURIComponent(paymentId)}`);
+    subscriptionId = typeof payment.subscription_id === 'string' ? payment.subscription_id : '';
+    if (!subscriptionId) throw new ApiError('This Dodo product is a one-time payment, not a subscription. Configure Starter and Pro as recurring products.', 422, null, { code: 'DODO_PRODUCT_NOT_SUBSCRIPTION', stage: 'billing_sync', requestId: id });
+  }
+  const data = await getDodo(`/subscriptions/${encodeURIComponent(subscriptionId)}`);
+  const subscription = await syncSubscription(supabase, env, data, user);
   return json({ subscription });
 }
 

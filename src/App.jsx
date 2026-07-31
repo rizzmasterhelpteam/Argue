@@ -481,12 +481,14 @@ export function App({ user = null, onLogout, onDeleteAccount }) {
     const params = new URLSearchParams(window.location.search);
     if (params.get('checkout') !== 'success') return;
     const subscriptionId = params.get('subscription_id');
-    if (!subscriptionId) {
+    const paymentId = params.get('payment_id');
+    if (!subscriptionId && !paymentId) {
       showNotice('Payment received. Your membership will activate as soon as Dodo confirms it.');
       return;
     }
     let active = true;
-    void apiJson(`/api/billing/sync?subscription_id=${encodeURIComponent(subscriptionId)}`)
+    const checkoutId = subscriptionId ? `subscription_id=${encodeURIComponent(subscriptionId)}` : `payment_id=${encodeURIComponent(paymentId)}`;
+    void apiJson(`/api/billing/sync?${checkoutId}`)
       .then(async ({ subscription }) => {
         if (!active) return;
         await refreshUsage();
