@@ -43,8 +43,7 @@ export function AuthScreen() {
   return (
     <main className="auth-stage">
       <section className="auth-panel" aria-labelledby="auth-title">
-        <div className="auth-brand" aria-label="Argue AI"><span>Argue</span><b>AI</b></div>
-        <div className="auth-mark" aria-hidden="true"><Waveform size={25} weight="bold" /></div>
+        <div className="auth-brand" aria-label="Argue AI"><span className="auth-mark" aria-hidden="true"><Waveform size={22} weight="bold" /></span><span>Argue</span><b>AI</b></div>
         <p className="eyebrow">YOUR THINKING ARENA</p>
         <h1 id="auth-title">{isRegistering ? 'Make your case.' : 'Welcome back.'}</h1>
         <p>{isRegistering ? 'Create an account to keep every argument and idea.' : 'Sign in to continue your conversations.'}</p>
